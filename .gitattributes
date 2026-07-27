@@ -1,0 +1,16 @@
+# Normalise to LF in the repository; Git still checks out CRLF on Windows.
+* text=auto eol=lf
+
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.svg       text eol=lf
+*.manifest  text eol=lf
+
+# .reg files are UTF-16LE with CRLF by specification. Treat them as binary so
+# Git never rewrites line endings or corrupts the encoding.
+*.reg       binary

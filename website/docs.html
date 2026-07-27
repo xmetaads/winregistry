@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation — regx | winregistry.org</title>
+<meta name="description" content="Complete command reference for regx: install, import, export, convert, sync, validate --fix, probe, offline hive operations via RegLoadAppKey, exit codes, and getting past AppLocker and WDAC.">
+<link rel="canonical" href="https://winregistry.org/docs.html">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://winregistry.org/docs.html">
+<meta property="og:title" content="regx documentation">
+<meta property="og:description" content="Complete command reference for the standard-user Windows Registry CLI.">
+<meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="assets/css/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('winregistry-theme');
+      if (t) document.documentElement.dataset.theme = t;
+      else if (window.matchMedia('(prefers-color-scheme: light)').matches)
+        document.documentElement.dataset.theme = 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
+      </svg>
+      <span>winregistry<span class="brand-tld">.org</span></span>
+    </a>
+
+    <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"></path>
+      </svg>
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+      </svg>
+    </button>
+
+    <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle navigation">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+
+    <nav class="nav" id="primary-nav" aria-label="Primary">
+      <a href="./#features">Features</a>
+      <a href="./#redirection">Redirection</a>
+      <a href="./#offline">Offline hives</a>
+      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="https://github.com/winregistry/regx">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="wrap docs">
+
+  <nav class="toc" aria-label="On this page">
+    <h2>Getting started</h2>
+    <ul>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#quickstart">Quick start</a></li>
+      <li><a href="#globals">Global flags</a></li>
+      <li><a href="#exit-codes">Exit codes</a></li>
+    </ul>
+    <h2>Commands</h2>
+    <ul>
+      <li><a href="#validate">validate</a></li>
+      <li><a href="#convert">convert</a></li>
+      <li><a href="#merge">merge</a></li>
+      <li><a href="#import">import &amp; sync</a></li>
+      <li><a href="#export">export</a></li>
+      <li><a href="#query">query, set, delete</a></li>
+      <li><a href="#probe">probe</a></li>
+      <li><a href="#hive">hive</a></li>
+    </ul>
+    <h2>Reference</h2>
+    <ul>
+      <li><a href="#redirect-ref">Redirection flags</a></li>
+      <li><a href="#types">Value types</a></li>
+      <li><a href="#applocker">AppLocker &amp; WDAC</a></li>
+      <li><a href="#format">.reg format notes</a></li>
+    </ul>
+  </nav>
+
+  <div class="docs-body">
+
+    <h1>Documentation</h1>
+    <p style="font-size:1.0625rem">
+      <code>regx</code> is a single-file Windows Registry CLI for standard users. Every command below runs
+      without elevation. Where a command physically cannot succeed without admin rights, it says so and
+      exits with a specific code rather than failing obscurely.
+    </p>
+
+    <!-- ================= INSTALL ================= -->
+    <section id="install">
+      <h2>Install</h2>
+      <p>
+        There is nothing to install. Download <code>regx.exe</code>, put it anywhere you can write, and run it.
+        It creates no registry entries, no service, no scheduled task and no <code>%APPDATA%</code> folder.
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-dim"># Verify it runs and see what the environment allows</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">.\regx.exe</span> <span class="tok-flag">--self-check</span>
+
+regx self-check
+  [ok  ] process          64-bit process. HKLM\SOFTWARE resolves to the 64-bit view.
+  [ok  ] elevation        not elevated (medium integrity), as intended
+  [ok  ] hkcu             HKCU\Software is writable - the redirection target is usable</code></pre>
+      </div>
+
+      <p>
+        A file downloaded with a browser carries a Mark-of-the-Web stream that triggers SmartScreen.
+        <code>--self-check</code> reports it; clear it with <code>Unblock-File .\regx.exe</code>.
+      </p>
+
+      <h3>Build from source</h3>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">cargo</span> build <span class="tok-flag">--release</span>   <span class="tok-dim"># -&gt; target\release\regx.exe</span></code></pre>
+      </div>
+      <p>
+        Requires a Rust MSVC toolchain. The build embeds the <code>asInvoker</code> manifest into the PE and
+        statically links the CRT, so the result needs no Visual C++ redistributable.
+      </p>
+    </section>
+
+    <!-- ================= QUICKSTART ================= -->
+    <section id="quickstart">
+      <h2>Quick start</h2>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-quick">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-quick"><span class="tok-dim"># 1. Lint and repair a .reg file you found online</span>
+regx validate app.reg <span class="tok-flag">--fix</span> <span class="tok-flag">--backup</span>
+
+<span class="tok-dim"># 2. See where each key would land, without writing anything</span>
+regx convert app.reg <span class="tok-flag">--redirect</span> auto
+
+<span class="tok-dim"># 3. Check you can actually write to the destination</span>
+regx probe <span class="tok-str">"HKCU\Software\Acme"</span>
+
+<span class="tok-dim"># 4. Apply it. An undo file is written before anything changes.</span>
+regx import app.reg
+
+<span class="tok-dim"># 5. Changed your mind</span>
+regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
+      </div>
+    </section>
+
+    <!-- ================= GLOBALS ================= -->
+    <section id="globals">
+      <h2>Global flags</h2>
+      <p>These apply to every command.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Flag</th><th scope="col">Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>--dry-run</code></td><td class="muted">Perform every read — so permission problems still surface — but skip all writes.</td></tr>
+            <tr><td><code>-y</code>, <code>--yes</code></td><td class="muted">Skip confirmation prompts.</td></tr>
+            <tr><td><code>--output text|json</code></td><td class="muted">Machine-readable output for pipelines.</td></tr>
+            <tr><td><code>--view 64|32|both</code></td><td class="muted">Choose the WOW64 registry view explicitly instead of inheriting process bitness.</td></tr>
+            <tr><td><code>--log-level</code></td><td class="muted"><code>error</code>, <code>warn</code>, <code>info</code> (default) or <code>debug</code>.</td></tr>
+            <tr><td><code>--self-check</code></td><td class="muted">Report what AppLocker, SRP, WDAC and the process token do to this binary, then continue or exit.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= EXIT CODES ================= -->
+    <section id="exit-codes">
+      <h2>Exit codes</h2>
+      <p>Stable across releases, so a script can branch on them.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Code</th><th scope="col">Meaning</th><th scope="col">Typical cause</th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td>Success</td><td class="muted">—</td></tr>
+            <tr><td><code>2</code></td><td>Usage error</td><td class="muted">Unknown flag, missing argument.</td></tr>
+            <tr><td><code>3</code></td><td>Parse error</td><td class="muted">The <code>.reg</code> file has invalid syntax.</td></tr>
+            <tr><td><code>4</code></td><td>Access denied</td><td class="muted">The key exists but this token cannot write to it.</td></tr>
+            <tr><td><code>5</code></td><td>Partial success</td><td class="muted">Some keys were skipped or some subkeys were unreadable.</td></tr>
+            <tr><td><code>6</code></td><td>Redirection refused</td><td class="muted">A key had no per-user equivalent and <code>--on-refuse fail</code> was set.</td></tr>
+            <tr><td><code>7</code></td><td>File I/O error</td><td class="muted">Could not read or write a file on disk.</td></tr>
+            <tr><td><code>8</code></td><td>Not found</td><td class="muted">The key or value does not exist.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= VALIDATE ================= -->
+    <section id="validate">
+      <h2><code>validate</code></h2>
+      <p>Parse and lint one or more <code>.reg</code> files. Touches the registry only if you ask it to.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx validate &lt;FILE...&gt; [<span class="tok-flag">--strict</span>] [<span class="tok-flag">--fix</span> [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--backup</span>]]</code></pre>
+      </div>
+
+      <h3>What <code>--fix</code> repairs</h3>
+      <p>Safe repairs are unambiguously what the author meant. <strong>Lossy</strong> repairs change bytes — they are still applied, because the file is already broken, but they are labelled so you can judge.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Defect</th><th scope="col">Repair</th><th scope="col">Class</th></tr></thead>
+          <tbody>
+            <tr><td><code>hex(1)</code>/<code>hex(2)</code>/<code>hex(6)</code> missing NUL terminator</td><td class="muted">Append <code>00,00</code></td><td><span class="pill pill-high">safe</span></td></tr>
+            <tr><td><code>hex(7)</code> missing double NUL</td><td class="muted">Append until the list terminates</td><td><span class="pill pill-high">safe</span></td></tr>
+            <tr><td>Trailing whitespace after a <code>\</code> continuation</td><td class="muted">Removed — regedit stops folding there and drops the rest of the payload</td><td><span class="pill pill-high">safe</span></td></tr>
+            <tr><td>Control characters in a key path or value name</td><td class="muted">Stripped</td><td><span class="pill pill-high">safe</span></td></tr>
+            <tr><td>Duplicate key blocks</td><td class="muted">Coalesced, last write wins</td><td><span class="pill pill-medium">safe / lossy</span></td></tr>
+            <tr><td>Odd-length UTF-16 payload</td><td class="muted">Padded with one NUL byte</td><td><span class="pill pill-low">lossy</span></td></tr>
+            <tr><td><code>hex(4)</code>/<code>hex(b)</code> of the wrong length</td><td class="muted">Reported, never guessed</td><td><span class="pill pill-refuse">not fixed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p><code>--fix</code> refuses to run on a file with <strong>syntax</strong> errors. Repairing those would mean guessing the author's intent rather than fixing a known defect.</p>
+      </div>
+    </section>
+
+    <!-- ================= CONVERT ================= -->
+    <section id="convert">
+      <h2><code>convert</code></h2>
+      <p>Transform a <code>.reg</code> file offline. This command never touches the registry, so it is the safe way to preview a redirection.</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx convert &lt;FILE&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--min-confidence</span> LEVEL] [<span class="tok-flag">--reg4</span>]</code></pre>
+      </div>
+      <p>
+        With no <code>-o</code>, the result is written to standard output. <code>--reg4</code> emits the legacy ANSI
+        <code>REGEDIT4</code> dialect instead of UTF-16 <code>Version 5.00</code>.
+      </p>
+    </section>
+
+    <!-- ================= MERGE ================= -->
+    <section id="merge">
+      <h2><code>merge</code></h2>
+      <p>Combine several <code>.reg</code> files into one. Duplicate keys are folded case-insensitively with last-write-wins, and every value conflict is reported.</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx merge &lt;FILE&gt; &lt;FILE...&gt; [<span class="tok-flag">-o</span> FILE]</code></pre>
+      </div>
+    </section>
+
+    <!-- ================= IMPORT ================= -->
+    <section id="import">
+      <h2><code>import</code> and <code>sync</code></h2>
+      <p>Merge <code>.reg</code> files into the live registry. Both write an undo snapshot before making any change.</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx import &lt;FILE...&gt; [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--backup</span> FILE | <span class="tok-flag">--no-backup</span>]
+regx sync   &lt;FILE&gt;    [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--prune</span>]</code></pre>
+      </div>
+
+      <h3>The undo snapshot</h3>
+      <p>
+        The registry offers no transaction, so a failed merge would otherwise leave half-applied state.
+        Before writing, <code>regx</code> computes the inverse of the pending change and saves it as an ordinary
+        <code>.reg</code> file — <code>&lt;input&gt;.undo.reg</code> by default.
+      </p>
+      <ul>
+        <li><code>[-KEY]</code> that exists &rarr; the whole subtree is exported, so undo recreates it</li>
+        <li>Key exists, value exists &rarr; the current data is recorded</li>
+        <li>Key exists, value absent &rarr; <code>"name"=-</code> is recorded</li>
+        <li>Key does not exist &rarr; <code>[-TOPMOST_MISSING_ANCESTOR]</code>, <em>not</em> <code>[-KEY]</code> — deleting only the leaf would leave the intermediate keys behind as empty shells</li>
+      </ul>
+      <p>
+        Restores are ordered before removals. If any key could not be read, the undo file is reported as
+        <strong>INCOMPLETE</strong> rather than silently trusted.
+      </p>
+
+      <h3><code>sync --prune</code></h3>
+      <p>
+        Makes the apply idempotent: any live value under a declared key that the file does not mention becomes
+        an explicit delete. Use it when the <code>.reg</code> file is meant to be the complete desired state.
+      </p>
+    </section>
+
+    <!-- ================= EXPORT ================= -->
+    <section id="export">
+      <h2><code>export</code></h2>
+      <p>Write a key to a <code>.reg</code> file, byte-compatible with regedit's own output so diffs are meaningful.</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx export &lt;KEY&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">-r</span>] [<span class="tok-flag">--reg4</span>]</code></pre>
+      </div>
+      <p>
+        A denied subkey never aborts the export. Partial export of your own hive is normal — Group-Policy-locked
+        policy keys and <code>Protected</code> subtrees are common — so skips are listed and the command exits
+        with code <code>5</code>.
+      </p>
+    </section>
+
+    <!-- ================= QUERY ================= -->
+    <section id="query">
+      <h2><code>query</code>, <code>set</code>, <code>delete</code></h2>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx query  &lt;KEY&gt; [<span class="tok-flag">-v</span> NAME] [<span class="tok-flag">-r</span>]
+regx set    &lt;KEY&gt; <span class="tok-flag">-v</span> NAME <span class="tok-flag">-t</span> TYPE <span class="tok-flag">-d</span> DATA [<span class="tok-flag">--redirect</span> MODE]
+regx delete &lt;KEY&gt; [<span class="tok-flag">-v</span> NAME] [<span class="tok-flag">-r</span>]</code></pre>
+      </div>
+      <p>
+        <code>delete</code> without <code>-v</code> removes the key and its subkeys, so it requires <code>-r</code>
+        as an explicit acknowledgement.
+      </p>
+    </section>
+
+    <!-- ================= PROBE ================= -->
+    <section id="probe">
+      <h2><code>probe</code></h2>
+      <p>
+        Answers the only question that matters before an import: <em>can this user actually write here?</em>
+        It really opens the key rather than inferring from the path, because an ACL on a single subkey can deny
+        a standard user even inside their own <code>HKCU</code>.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> probe <span class="tok-str">"HKLM\SOFTWARE\Microsoft"</span>
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft
+  exists    true
+  readable  true
+  writable  false
+  creatable false</code></pre>
+      </div>
+      <p>
+        <code>probe</code> has no side effects: when the key does not exist it walks up to the nearest existing
+        ancestor and tests write access there instead of creating a scratch key.
+      </p>
+    </section>
+
+    <!-- ================= HIVE ================= -->
+    <section id="hive">
+      <h2><code>hive</code> — offline hive files</h2>
+      <p>
+        <code>RegLoadKey</code>, which <code>reg load</code> and regedit's <em>Load Hive</em> both call, requires
+        <code>SeRestorePrivilege</code>. <code>RegLoadAppKeyW</code> does not: it mounts the hive into a private,
+        unnamed slot that only the calling process can see, so there is no global namespace entry to protect and
+        no privilege to check.
+      </p>
+
+      <h3>Why <code>mount</code> and <code>unmount</code> are not separate commands</h3>
+      <p>
+        The handle is <strong>process-scoped</strong>. Closing it — including at process exit — unloads the hive.
+        So this cannot work:
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">does not work</span></div>
+<pre><code><span class="tok-dim">regx hive mount NTUSER.DAT --as my_hive   # process 1 exits -&gt; hive unloaded</span>
+<span class="tok-dim">regx hive set my_hive\Software\App ...    # process 2: nothing is mounted</span>
+<span class="tok-dim">regx hive unmount my_hive                 # process 3: nothing to unmount</span></code></pre>
+      </div>
+      <p>
+        There is no supported workaround. The handle cannot be published to the registry namespace — that is
+        exactly what the privilege check guards — and inheriting it into another process would require the
+        mounting process to stay alive, i.e. a resident daemon, which defeats "portable, no install".
+        Mount, operate and unmount therefore happen inside one process.
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-exec">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-exec"><span class="tok-dim"># Several operations under a single mount</span>
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">--create</span> exec <span class="tok-flag">\</span>
+  <span class="tok-flag">-c</span> <span class="tok-str">"set Software\MyApp -v License -d OK"</span> <span class="tok-flag">\</span>
+  <span class="tok-flag">-c</span> <span class="tok-str">"set Software\MyApp -v Seats -t REG_DWORD -d 25"</span> <span class="tok-flag">\</span>
+  <span class="tok-flag">-c</span> <span class="tok-str">"query Software\MyApp -r"</span>
+
+<span class="tok-dim"># A single operation needs no exec</span>
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <span class="tok-flag">-o</span> offline.reg <span class="tok-flag">--root-as</span> <span class="tok-str">"HKEY_USERS\OFFLINE"</span></code></pre>
+      </div>
+
+      <h3>Operations</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Operation</th><th scope="col">Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>info</code></td><td class="muted">Size, <code>regf</code> signature, and whether the hive can be mounted read-only or read/write. Run this first.</td></tr>
+            <tr><td><code>ls</code></td><td class="muted">List subkeys.</td></tr>
+            <tr><td><code>query</code></td><td class="muted">Print values under a subkey.</td></tr>
+            <tr><td><code>set</code></td><td class="muted">Write one value.</td></tr>
+            <tr><td><code>delete</code></td><td class="muted">Delete a subkey or a single value.</td></tr>
+            <tr><td><code>import</code></td><td class="muted">Merge a <code>.reg</code> file in. <code>--strip-root</code> removes the mount-point prefix it was exported under.</td></tr>
+            <tr><td><code>export</code></td><td class="muted">Write part of the hive to a <code>.reg</code> file. <code>--root-as</code> sets the root label, because the <code>.reg</code> format has no syntax for "app hive".</td></tr>
+            <tr><td><code>exec</code></td><td class="muted">Run several operations under one mount, via repeated <code>-c</code> or a <code>--script</code> file.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What you can realistically open</h3>
+      <p>
+        Write access to the <em>file</em> is still required, and a hive already mounted by the OS is held
+        exclusively. Realistic targets: a logged-off secondary profile, a <strong>copy</strong> of a hive, an
+        application's private hive, or a hive on a mounted backup or VHD. A logged-on user's
+        <code>NTUSER.DAT</code> fails with <code>ERROR_SHARING_VIOLATION</code> by design —
+        <code>hive info</code> reports this before you commit to a write.
+      </p>
+    </section>
+
+    <!-- ================= REDIRECT REF ================= -->
+    <section id="redirect-ref">
+      <h2>Redirection flags</h2>
+      <p>Shared by <code>import</code>, <code>convert</code>, <code>sync</code> and <code>set</code>.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Flag</th><th scope="col">Values</th><th scope="col">Meaning</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>--redirect</code></td>
+              <td class="muted"><code>off</code>, <code>auto</code>, <code>classes-only</code>, <code>force</code></td>
+              <td class="muted">Default <code>auto</code>. <code>classes-only</code> maps just <code>Software\Classes</code>, the one mapping reliable by design. <code>force</code> implies the lowest confidence floor.</td>
+            </tr>
+            <tr>
+              <td><code>--min-confidence</code></td>
+              <td class="muted"><code>high</code>, <code>medium</code>, <code>low</code></td>
+              <td class="muted">Default <code>medium</code>. Mappings weaker than this are skipped and reported.</td>
+            </tr>
+            <tr>
+              <td><code>--on-refuse</code></td>
+              <td class="muted"><code>skip</code>, <code>fail</code></td>
+              <td class="muted">What to do with keys that have no per-user equivalent at all. Default <code>skip</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <code>SOFTWARE\WOW6432Node\X</code> is normalised to <code>SOFTWARE\X</code> before classification, so
+        32-bit and 64-bit exports of the same application collapse onto one destination. Because that collapse
+        produces duplicate key blocks, every redirect run is followed by a case-insensitive coalesce pass.
+      </p>
+    </section>
+
+    <!-- ================= TYPES ================= -->
+    <section id="types">
+      <h2>Value types</h2>
+      <p><code>set</code> follows <code>reg.exe</code> conventions, so muscle memory transfers.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Type</th><th scope="col"><code>-d</code> format</th><th scope="col">Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>REG_SZ</code></td><td class="muted">Literal text</td><td><code>-d "C:\Tools"</code></td></tr>
+            <tr><td><code>REG_EXPAND_SZ</code></td><td class="muted">Text with environment variables</td><td><code>-d "%USERPROFILE%\bin"</code></td></tr>
+            <tr><td><code>REG_MULTI_SZ</code></td><td class="muted">Entries separated by a literal <code>\0</code></td><td><code>-d "a.txt\0b.txt"</code></td></tr>
+            <tr><td><code>REG_DWORD</code></td><td class="muted">Decimal or <code>0x</code> hex</td><td><code>-d 25</code> or <code>-d 0x19</code></td></tr>
+            <tr><td><code>REG_QWORD</code></td><td class="muted">Decimal or <code>0x</code> hex</td><td><code>-d 0xdeadbeef</code></td></tr>
+            <tr><td><code>REG_BINARY</code></td><td class="muted">Hex digits, separators optional</td><td><code>-d "01 02 03"</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= APPLOCKER ================= -->
+    <section id="applocker">
+      <h2>Getting past AppLocker, SRP and WDAC</h2>
+      <p>
+        UAC is not the real obstacle in a locked-down enterprise; application control is. An unsigned
+        <code>.exe</code> under <code>%TEMP%</code>, <code>Downloads</code> or <code>%APPDATA%</code> is precisely
+        the shape the default rule sets deny. <code>regx --self-check</code> reads the relevant policy keys —
+        all readable by a standard user — and reports what applies.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <h3>Sign the binary</h3>
+          <p>
+            A publisher rule follows the file anywhere; a path rule does not. An <strong>EV certificate</strong>
+            additionally carries immediate SmartScreen reputation, which a standard OV certificate has to
+            accumulate. In a managed environment a certificate from the organisation's <strong>internal CA</strong>
+            is usually faster to obtain and already trusted domain-wide.
+          </p>
+        </li>
+        <li>
+          <h3>Run from a path the policy already allows</h3>
+          <p>Typically <code>%ProgramFiles%</code> or an IT-managed share, rather than <code>Downloads</code>.</p>
+        </li>
+        <li>
+          <h3>Clear the Mark-of-the-Web</h3>
+          <p><code>Unblock-File</code> removes the <code>Zone.Identifier</code> stream that triggers the SmartScreen interstitial.</p>
+        </li>
+      </ol>
+
+      <div class="terminal" style="margin-top: var(--space-lg)">
+        <div class="terminal-bar"><span class="title">signing</span></div>
+<pre><code>signtool sign <span class="tok-flag">/fd</span> SHA256 <span class="tok-flag">/tr</span> http://timestamp.digicert.com <span class="tok-flag">/td</span> SHA256 <span class="tok-flag">/a</span> regx.exe</code></pre>
+      </div>
+      <p>Always timestamp with <code>/tr</code> — without it, signatures stop validating when the certificate expires.</p>
+
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <p>
+          <strong>WDAC is different.</strong> It ignores file location entirely. If a user-mode code-integrity
+          policy is deployed, only a signature or an explicit hash rule will let the binary run — steps 2 and 3
+          do not help.
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= FORMAT ================= -->
+    <section id="format">
+      <h2><code>.reg</code> format notes</h2>
+      <p>Behaviours that surprise people writing <code>.reg</code> files by hand, all of which <code>regx</code> matches to regedit:</p>
+      <ul>
+        <li><strong>Two escapes only.</strong> <code>\\</code> and <code>\"</code>. There is no <code>\n</code> or <code>\t</code> — writing one produces a literal backslash followed by that character.</li>
+        <li><strong>Two encodings.</strong> <code>Windows Registry Editor Version 5.00</code> is UTF-16LE with a BOM; <code>REGEDIT4</code> is ANSI in the machine's codepage. A REGEDIT4 file written on one codepage decodes differently on another.</li>
+        <li><strong>Continuations are hex-only.</strong> A trailing <code>\</code> continues a <code>hex</code> payload. A string value ending in <code>"C:\\"</code> is not a continuation.</li>
+        <li><strong>Strings need terminators.</strong> <code>hex(1)</code>, <code>hex(2)</code> and <code>hex(7)</code> payloads must be NUL-terminated — <code>REG_MULTI_SZ</code> doubly so. Without them the consuming application reads past the value.</li>
+        <li><strong>Comments are line-initial.</strong> A <code>;</code> starts a comment only at the beginning of a line, and its behaviour inside a hex continuation is inconsistent in regedit itself.</li>
+      </ul>
+      <p>
+        <code>regx</code> preserves values it cannot model losslessly as raw <code>hex(N)</code> bytes, and only
+        writes a <code>REG_SZ</code> as a quoted string when it is clean UTF-16 — even length, single trailing NUL,
+        no embedded NUL, no control characters. A raw newline inside a quoted string would corrupt the next line
+        of the file.
+      </p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>regx is free software, MIT licensed. Windows 8.1 and later, x64 and ARM64.</p>
+    <ul class="footer-links">
+      <li><a href="./">Home</a></li>
+      <li><a href="./#redirection">Redirection</a></li>
+      <li><a href="https://github.com/winregistry/regx">Source</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script src="assets/js/app.js" defer></script>
+</body>
+</html>

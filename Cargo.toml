@@ -1,0 +1,17 @@
+[package]
+name = "regx"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Portable, non-admin Windows Registry CLI"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

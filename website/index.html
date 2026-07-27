@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>regx — Windows Registry CLI that never asks for admin | winregistry.org</title>
+<meta name="description" content="A portable, single-file Windows Registry CLI for standard users. Manifested asInvoker, so it never raises a UAC prompt. Smart HKLM to HKCU redirection, offline hive editing without administrator rights, and automatic undo snapshots.">
+<link rel="canonical" href="https://winregistry.org/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://winregistry.org/">
+<meta property="og:title" content="regx — Windows Registry CLI that never asks for admin">
+<meta property="og:description" content="Portable, single-file, standard-user Registry CLI. No UAC prompt, no installer, no runtime.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="assets/css/style.css">
+<script>
+  // Applied before first paint so a stored light theme never flashes dark.
+  (function () {
+    try {
+      var t = localStorage.getItem('winregistry-theme');
+      if (t) document.documentElement.dataset.theme = t;
+      else if (window.matchMedia('(prefers-color-scheme: light)').matches)
+        document.documentElement.dataset.theme = 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
+      </svg>
+      <span>winregistry<span class="brand-tld">.org</span></span>
+    </a>
+
+    <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"></path>
+      </svg>
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+      </svg>
+    </button>
+
+    <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle navigation">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+
+    <nav class="nav" id="primary-nav" aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#redirection">Redirection</a>
+      <a href="#offline">Offline hives</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/winregistry/regx">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============================ HERO ============================ -->
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <span class="badge"><span class="dot" aria-hidden="true"></span> v0.1 &middot; MIT licensed</span>
+
+      <h1>The Registry CLI that never asks for admin.</h1>
+
+      <p class="lede">
+        <code>regx</code> reads, converts and merges <code>.reg</code> files and writes them to
+        <code>HKEY_CURRENT_USER</code> — from a single portable executable manifested
+        <strong>asInvoker</strong>. It never elevates, so it <strong>never raises a UAC prompt</strong>.
+        No installer, no runtime, no registry footprint of its own.
+      </p>
+
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="docs.html#install">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          Get regx
+        </a>
+        <a class="btn btn-secondary" href="docs.html">Read the docs</a>
+      </div>
+
+      <div class="terminal reveal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-hero">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-hero"><span class="tok-dim"># Preview what a machine-wide .reg would do as a standard user</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> convert app.reg <span class="tok-flag">--redirect</span> auto
+
+  redirect <span class="tok-str">[high]</span>   HKLM\SOFTWARE\Classes\.acme  <span class="tok-dim">-&gt;</span>  HKCU\SOFTWARE\Classes\.acme
+  redirect <span class="tok-str">[medium]</span> HKLM\SOFTWARE\Acme\Editor    <span class="tok-dim">-&gt;</span>  HKCU\SOFTWARE\Acme\Editor
+  skip     <span class="tok-str">[low]</span>    HKLM\SOFTWARE\Policies\...   <span class="tok-dim">(Group Policy overwrites it)</span>
+  refuse            HKLM\SYSTEM\CurrentControlSet\Services\AcmeSvc</code></pre>
+      </div>
+
+      <dl class="hero-facts">
+        <div><dt>656 KB</dt><dd>Single executable, static CRT</dd></div>
+        <div><dt>0</dt><dd>UAC prompts, ever</dd></div>
+        <div><dt>0</dt><dd>Runtime dependencies</dd></div>
+        <div><dt>40</dt><dd>Tests against the live registry</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============================ PROBLEM ============================ -->
+  <section id="why">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">The problem</span>
+        <h2>"Access is denied." — every registry tool, on a locked-down machine</h2>
+        <p>
+          <code>regedit.exe</code>, <code>reg.exe</code> and every GUI alternative assume you can elevate.
+          On a corporate machine you cannot, so importing a perfectly ordinary <code>.reg</code> file fails
+          on the first <code>HKEY_LOCAL_MACHINE</code> line — even when the setting has a per-user
+          equivalent that would have worked all along.
+        </p>
+      </div>
+
+      <div class="callout reveal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <p>
+          <strong>Registry virtualization will not save you.</strong> Because <code>regx</code> ships an explicit
+          manifest, LUAFV is disabled: a write to HKLM returns a clean <code>ACCESS_DENIED</code> instead of being
+          silently diverted to <code>VirtualStore</code>. That honest failure is what Smart Redirection reacts to.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ FEATURES ============================ -->
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">Capabilities</span>
+        <h2>Built for the standard-user path</h2>
+        <p>Not a privileged tool with the elevation removed — every feature is designed around what a non-admin token can actually do.</p>
+      </div>
+
+      <div class="grid">
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </span>
+          <h3>Never elevates</h3>
+          <p>Manifested <code>asInvoker</code> with <code>MANIFESTUAC:NO</code>, embedded directly in the PE. There is no code path that requests elevation, so there is no prompt to dismiss.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line>
+            </svg>
+          </span>
+          <h3>Smart Redirection</h3>
+          <p>Rewrites HKLM paths to their per-user equivalent — and grades every mapping, so a rewrite that would quietly do nothing is refused rather than reported as success.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"></path><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path>
+            </svg>
+          </span>
+          <h3>Offline hive engine</h3>
+          <p>Mounts <code>NTUSER.DAT</code> and application hives through <code>RegLoadAppKey</code> — the one hive API that does not require <code>SeRestorePrivilege</code>. Read and write, no admin.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="1 4 1 10 7 10"></polyline><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"></path>
+            </svg>
+          </span>
+          <h3>Automatic undo</h3>
+          <p>The registry has no transaction, so every import computes its own inverse first and writes it as a plain <code>.undo.reg</code>. If anything half-applies, rolling back is one command.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><polyline points="9 15 11 17 15 13"></polyline>
+            </svg>
+          </span>
+          <h3>Linter with auto-repair</h3>
+          <p><code>validate --fix</code> restores missing NUL terminators, repairs <code>REG_MULTI_SZ</code> lists, strips control characters from paths and folds duplicate keys — labelling every lossy repair.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+          </span>
+          <h3>Pipeline-ready</h3>
+          <p>Distinct exit codes for parse errors, access denied, partial application and refused redirects. <code>--output json</code> everywhere, <code>--dry-run</code> on every write.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ REDIRECTION ============================ -->
+  <section id="redirection">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">The hard part</span>
+        <h2>Redirection that tells you when it would not work</h2>
+        <p>
+          A naive <code>HKLM</code> &rarr; <code>HKCU</code> string replace always "succeeds": it writes cleanly and
+          changes nothing. That false success is the real failure mode, so every mapping carries a confidence level
+          and a reason, gated by <code>--min-confidence</code>.
+        </p>
+      </div>
+
+      <div class="table-scroll reveal">
+        <table>
+          <caption class="visually-hidden">How regx classifies each HKLM source path when redirecting to HKCU</caption>
+          <thead>
+            <tr><th scope="col">Source path</th><th scope="col">Confidence</th><th scope="col">Why</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HKCR\*</code><br><code>HKLM\SOFTWARE\Classes\*</code></td>
+              <td><span class="pill pill-high"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>High</span></td>
+              <td class="muted">HKCR is a merged view; the per-user branch takes precedence by design.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\…\CurrentVersion\Run</code></td>
+              <td><span class="pill pill-high"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>High</span></td>
+              <td class="muted">Windows reads the per-user copy in addition to the machine copy.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\SOFTWARE\&lt;Vendor&gt;\&lt;App&gt;</code></td>
+              <td><span class="pill pill-medium"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line></svg>Medium</span></td>
+              <td class="muted">Works only if the application itself falls back to HKCU. Many do not.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\SOFTWARE\Policies\*</code></td>
+              <td><span class="pill pill-low"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Low</span></td>
+              <td class="muted">SYSTEM services read HKLM only — <em>and</em> Group Policy refresh wipes the <code>HKCU\Software\Policies</code> subtree every ~90 minutes.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\SYSTEM</code>, <code>SAM</code>, <code>SECURITY</code></td>
+              <td><span class="pill pill-refuse"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>Refuse</span></td>
+              <td class="muted">Services, drivers and account databases have no per-user equivalent at all.</td>
+            </tr>
+            <tr>
+              <td><code>*\UserChoice</code></td>
+              <td><span class="pill pill-refuse"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>Refuse</span></td>
+              <td class="muted">Protected by a per-SID hash since Windows 8. File associations cannot be set from a <code>.reg</code> file, by anyone.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ OFFLINE ============================ -->
+  <section id="offline">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">Offline hive engine</span>
+        <h2>Edit a hive file without administrator rights</h2>
+        <p>
+          <code>reg load</code> and regedit's <em>Load Hive</em> both call <code>RegLoadKey</code>, which requires
+          <code>SeRestorePrivilege</code> — a privilege a standard user's token does not hold.
+          <code>RegLoadAppKey</code> does not require it: it mounts the hive into a private slot visible only to the
+          calling process, so there is no global namespace entry to protect.
+        </p>
+      </div>
+
+      <div class="terminal reveal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-hive">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-hive"><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> hive <span class="tok-str">"D:\Backup\NTUSER.DAT"</span> exec <span class="tok-flag">-c</span> <span class="tok-str">"query Software\MyApp -r"</span>
+
+regx: mounted D:\Backup\NTUSER.DAT via RegLoadAppKey (read-only), no elevation used
+&lt;hive&gt;\Software\MyApp
+    License        REG_SZ         OK
+    Seats          REG_DWORD      0x00000019 (25)
+regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
+      </div>
+
+      <div class="callout reveal" style="margin-top: var(--space-lg)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p>
+          <strong>Why there is no separate <code>mount</code> and <code>unmount</code>.</strong>
+          The handle is process-scoped — it unloads when the process exits, so a <code>mount</code> in one command
+          and a <code>set</code> in the next would find nothing mounted. Every operation therefore runs inside a
+          single mount, and <code>exec</code> chains as many as you need.
+          <a href="docs.html#hive">Full explanation in the docs &rarr;</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ HOW ============================ -->
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">Typical workflow</span>
+        <h2>From a machine-wide <code>.reg</code> to an applied per-user setting</h2>
+      </div>
+
+      <ol class="steps reveal">
+        <li>
+          <h3>Check the file before it touches anything</h3>
+          <p><code>regx validate app.reg --fix</code> repairs the damage a <code>.reg</code> file picks up from forums and chat clients, and reports what it refused to guess at.</p>
+        </li>
+        <li>
+          <h3>See where each key would land</h3>
+          <p><code>regx convert app.reg --redirect auto</code> prints the confidence and reason for every mapping without writing to the registry at all.</p>
+        </li>
+        <li>
+          <h3>Confirm you can actually write there</h3>
+          <p><code>regx probe "HKCU\Software\Acme"</code> really opens the key — an ACL on one subkey can deny you even inside your own hive.</p>
+        </li>
+        <li>
+          <h3>Apply, with a rollback already on disk</h3>
+          <p><code>regx import app.reg</code> writes <code>app.undo.reg</code> first, then applies. Reverting is <code>regx import app.undo.reg</code>.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================ CTA ============================ -->
+  <section id="get">
+    <div class="wrap">
+      <div class="cta reveal">
+        <h2>One file. Drop it anywhere and run it.</h2>
+        <p>
+          No installer, no service, no scheduled task, no registry entries of its own.
+          Delete the executable and nothing remains.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="docs.html#install">Install regx</a>
+          <a class="btn btn-secondary" href="https://github.com/winregistry/regx">View source</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>regx is free software, MIT licensed. Windows 8.1 and later, x64 and ARM64.</p>
+    <ul class="footer-links">
+      <li><a href="docs.html">Documentation</a></li>
+      <li><a href="docs.html#exit-codes">Exit codes</a></li>
+      <li><a href="docs.html#applocker">AppLocker &amp; WDAC</a></li>
+      <li><a href="https://github.com/winregistry/regx">Source</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script src="assets/js/app.js" defer></script>
+</body>
+</html>

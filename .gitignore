@@ -1,0 +1,19 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# Vendored third-party skill data (~7 MB). Not our code — reinstall with the
+# instructions in README.md rather than committing it.
+/.claude/skills/
+
+# Local Claude Code state
+/.claude/settings.local.json
+
+# Undo snapshots and scratch .reg files produced while testing
+*.undo.reg
+/sample.reg
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
