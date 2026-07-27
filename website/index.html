@@ -13,21 +13,12 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
-<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="assets/css/style.css">
-<script>
-  // Applied before first paint so a stored light theme never flashes dark.
-  (function () {
-    try {
-      var t = localStorage.getItem('winregistry-theme');
-      if (t) document.documentElement.dataset.theme = t;
-      else if (window.matchMedia('(prefers-color-scheme: light)').matches)
-        document.documentElement.dataset.theme = 'light';
-    } catch (e) {}
-  })();
-</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/assets/css/style.css">
+<script src="/assets/js/theme.js"></script>
 </head>
 <body>
 
@@ -35,7 +26,7 @@
 
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="./">
+    <a class="brand" href="/">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
       </svg>
@@ -61,7 +52,7 @@
       <a href="#features">Features</a>
       <a href="#redirection">Redirection</a>
       <a href="#offline">Offline hives</a>
-      <a href="docs.html">Docs</a>
+      <a href="/docs">Docs</a>
       <a href="https://github.com/xmetaads/winregistry">Source</a>
     </nav>
   </div>
@@ -84,13 +75,13 @@
       </p>
 
       <div class="hero-actions">
-        <a class="btn btn-primary" href="docs.html#install">
+        <a class="btn btn-primary" href="/docs#install">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
           Get regx
         </a>
-        <a class="btn btn-secondary" href="docs.html">Read the docs</a>
+        <a class="btn btn-secondary" href="/docs">Read the docs</a>
       </div>
 
       <div class="terminal reveal">
@@ -314,7 +305,7 @@ regx: mounted D:\Backup\NTUSER.DAT via RegLoadAppKey (read-only), no elevation u
 regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
       </div>
 
-      <div class="callout reveal" style="margin-top: var(--space-lg)">
+      <div class="callout reveal mt-lg">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
         </svg>
@@ -323,7 +314,7 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
           The handle is process-scoped — it unloads when the process exits, so a <code>mount</code> in one command
           and a <code>set</code> in the next would find nothing mounted. Every operation therefore runs inside a
           single mount, and <code>exec</code> chains as many as you need.
-          <a href="docs.html#hive">Full explanation in the docs &rarr;</a>
+          <a href="/docs#hive">Full explanation in the docs &rarr;</a>
         </p>
       </div>
     </div>
@@ -368,7 +359,7 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
           Delete the executable and nothing remains.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="docs.html#install">Install regx</a>
+          <a class="btn btn-primary" href="/docs#install">Install regx</a>
           <a class="btn btn-secondary" href="https://github.com/xmetaads/winregistry">View source</a>
         </div>
       </div>
@@ -381,14 +372,14 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
   <div class="wrap">
     <p>regx is free software, MIT licensed. Windows 8.1 and later, x64 and ARM64.</p>
     <ul class="footer-links">
-      <li><a href="docs.html">Documentation</a></li>
-      <li><a href="docs.html#exit-codes">Exit codes</a></li>
-      <li><a href="docs.html#applocker">AppLocker &amp; WDAC</a></li>
+      <li><a href="/docs">Documentation</a></li>
+      <li><a href="/docs#exit-codes">Exit codes</a></li>
+      <li><a href="/docs#applocker">AppLocker &amp; WDAC</a></li>
       <li><a href="https://github.com/xmetaads/winregistry">Source</a></li>
     </ul>
   </div>
 </footer>
 
-<script src="assets/js/app.js" defer></script>
+<script src="/assets/js/app.js" defer></script>
 </body>
 </html>

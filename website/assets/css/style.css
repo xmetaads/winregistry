@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* Fonts are linked from each document's <head>, not @import-ed here: an
+   @import inside a stylesheet cannot start downloading until this file has
+   itself been fetched and parsed, which serialises two round trips. */
 
 /* ==========================================================================
    Design tokens — from design-system/winregistry-org/MASTER.md
@@ -195,6 +197,13 @@ section { padding-block: var(--space-3xl); }
   font-size: 1.0625rem;
   margin-bottom: 0;
 }
+
+/* Small utilities that exist so no element needs a style="" attribute. The
+   Content-Security-Policy sent by Vercel omits 'unsafe-inline' for styles, so
+   an inline style attribute would simply not apply. */
+.mt-lg { margin-top: var(--space-lg); }
+.ml-auto { margin-left: auto; }
+.lead { font-size: 1.0625rem; }
 
 .eyebrow {
   display: inline-block;

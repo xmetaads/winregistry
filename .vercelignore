@@ -1,0 +1,20 @@
+# Only website/ is deployed (see outputDirectory in vercel.json). Everything
+# below is the Rust CLI and its tooling — uploading it would slow every deploy
+# without changing the output.
+
+/src/
+/target/
+/.cargo/
+/.claude/
+Cargo.toml
+Cargo.lock
+build.rs
+app.manifest
+
+# Design source, useful in the repo but not part of the deployed site.
+/design-system/
+
+# Local preview harness — never part of a deploy.
+dev-server.py
+
+*.reg

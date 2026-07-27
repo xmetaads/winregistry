@@ -16,6 +16,8 @@ cargo test                 # 40 tests, including live-registry round trips
 | `src/` | The `regx` CLI (Rust, MSVC toolchain) |
 | `app.manifest`, `build.rs` | `asInvoker` manifest, embedded into the PE at link time |
 | `website/` | Static site for **winregistry.org** — no build step ([README](website/README.md)) |
+| `vercel.json`, `.vercelignore` | Vercel deployment config: output directory, clean URLs, security headers |
+| `dev-server.py` | Local preview that reproduces Vercel's routing — `python dev-server.py` |
 | `design-system/` | Generated design system the site is built against |
 
 `.claude/skills/` is intentionally not committed: it holds ~7 MB of vendored

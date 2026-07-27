@@ -12,20 +12,12 @@
 <meta property="og:description" content="Complete command reference for the standard-user Windows Registry CLI.">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
-<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="assets/css/style.css">
-<script>
-  (function () {
-    try {
-      var t = localStorage.getItem('winregistry-theme');
-      if (t) document.documentElement.dataset.theme = t;
-      else if (window.matchMedia('(prefers-color-scheme: light)').matches)
-        document.documentElement.dataset.theme = 'light';
-    } catch (e) {}
-  })();
-</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/assets/css/style.css">
+<script src="/assets/js/theme.js"></script>
 </head>
 <body>
 
@@ -33,7 +25,7 @@
 
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="./">
+    <a class="brand" href="/">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
       </svg>
@@ -56,10 +48,10 @@
     </button>
 
     <nav class="nav" id="primary-nav" aria-label="Primary">
-      <a href="./#features">Features</a>
-      <a href="./#redirection">Redirection</a>
-      <a href="./#offline">Offline hives</a>
-      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="/#features">Features</a>
+      <a href="/#redirection">Redirection</a>
+      <a href="/#offline">Offline hives</a>
+      <a href="/docs" aria-current="page">Docs</a>
       <a href="https://github.com/xmetaads/winregistry">Source</a>
     </nav>
   </div>
@@ -98,7 +90,7 @@
   <div class="docs-body">
 
     <h1>Documentation</h1>
-    <p style="font-size:1.0625rem">
+    <p class="lead">
       <code>regx</code> is a single-file Windows Registry CLI for standard users. Every command below runs
       without elevation. Where a command physically cannot succeed without admin rights, it says so and
       exits with a specific code rather than failing obscurely.
@@ -516,7 +508,7 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
         </li>
       </ol>
 
-      <div class="terminal" style="margin-top: var(--space-lg)">
+      <div class="terminal mt-lg">
         <div class="terminal-bar"><span class="title">signing</span></div>
 <pre><code>signtool sign <span class="tok-flag">/fd</span> SHA256 <span class="tok-flag">/tr</span> http://timestamp.digicert.com <span class="tok-flag">/td</span> SHA256 <span class="tok-flag">/a</span> regx.exe</code></pre>
       </div>
@@ -560,13 +552,13 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
   <div class="wrap">
     <p>regx is free software, MIT licensed. Windows 8.1 and later, x64 and ARM64.</p>
     <ul class="footer-links">
-      <li><a href="./">Home</a></li>
-      <li><a href="./#redirection">Redirection</a></li>
+      <li><a href="/">Home</a></li>
+      <li><a href="/#redirection">Redirection</a></li>
       <li><a href="https://github.com/xmetaads/winregistry">Source</a></li>
     </ul>
   </div>
 </footer>
 
-<script src="assets/js/app.js" defer></script>
+<script src="/assets/js/app.js" defer></script>
 </body>
 </html>

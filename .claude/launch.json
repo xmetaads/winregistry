@@ -4,7 +4,7 @@
     {
       "name": "winregistry-site",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "website"],
+      "runtimeArgs": ["dev-server.py", "8899"],
       "port": 8899
     }
   ]
