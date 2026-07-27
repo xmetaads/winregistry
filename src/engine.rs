@@ -313,6 +313,27 @@ impl ApplyReport {
 /// Apply every key block. `dry_run` performs all the *reads* (so permission
 /// problems still surface) but skips every write.
 pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyReport {
+    apply_audited(roots, file, view, dry_run, None)
+}
+
+/// As [`apply`], but recording every mutation to an audit log.
+///
+/// The prior value is read before each write so the log records what was
+/// replaced, not merely what was written. That is one extra query per value,
+/// paid only when a log is actually attached.
+pub fn apply_audited(
+    roots: &Roots,
+    file: &RegFile,
+    view: View,
+    dry_run: bool,
+    mut audit: Option<&mut crate::audit::Logger>,
+) -> ApplyReport {
+    use crate::audit::{Event, Op, Outcome};
+    let outcome = if dry_run {
+        Outcome::Simulated
+    } else {
+        Outcome::Applied
+    };
     let mut r = ApplyReport::default();
 
     for block in &file.keys {
@@ -324,6 +345,17 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
             }
             if dry_run {
                 r.keys_deleted += 1;
+                if let Some(a) = audit.as_deref_mut() {
+                    a.record(Event {
+                        op: Op::KeyDelete,
+                        path: &block.path,
+                        name: None,
+                        before: None,
+                        after: None,
+                        outcome,
+                        detail: None,
+                    });
+                }
                 continue;
             }
             match root.delete_tree(&sub) {
@@ -332,8 +364,32 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
                     // itself so `[-KEY]` matches regedit's semantics.
                     let _ = root.delete_key(&sub, view);
                     r.keys_deleted += 1;
+                    if let Some(a) = audit.as_deref_mut() {
+                        a.record(Event {
+                            op: Op::KeyDelete,
+                            path: &block.path,
+                            name: None,
+                            before: None,
+                            after: None,
+                            outcome,
+                            detail: None,
+                        });
+                    }
                 }
-                Err(e) => r.failures.push((block.path.to_string(), e.to_string())),
+                Err(e) => {
+                    if let Some(a) = audit.as_deref_mut() {
+                        a.record(Event {
+                            op: Op::KeyDelete,
+                            path: &block.path,
+                            name: None,
+                            before: None,
+                            after: None,
+                            outcome: Outcome::Failed,
+                            detail: Some(&e.to_string()),
+                        });
+                    }
+                    r.failures.push((block.path.to_string(), e.to_string()));
+                }
             }
             continue;
         }
@@ -356,6 +412,17 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
                 Ok((k, created)) => {
                     if created {
                         r.keys_created += 1;
+                        if let Some(a) = audit.as_deref_mut() {
+                            a.record(Event {
+                                op: Op::KeyCreate,
+                                path: &block.path,
+                                name: None,
+                                before: None,
+                                after: None,
+                                outcome,
+                                detail: None,
+                            });
+                        }
                     }
                     Some(k)
                 }
@@ -370,6 +437,16 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
             let name = value_api_name(&v.name);
             let label = format!("{}\\{}", block.path, v.name);
 
+            // Read what is there now, so the log records what was replaced.
+            // Skipped entirely when nothing is listening.
+            let before = if audit.is_some() {
+                key.as_ref()
+                    .and_then(|k| k.get_value(name).ok().flatten())
+                    .map(|(ty, bytes)| raw_to_data(ty, &bytes))
+            } else {
+                None
+            };
+
             match &v.data {
                 RegData::Delete => {
                     let exists = key
@@ -381,11 +458,48 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
                     }
                     if dry_run {
                         r.values_deleted += 1;
+                        if let Some(a) = audit.as_deref_mut() {
+                            a.record(Event {
+                                op: Op::ValueDelete,
+                                path: &block.path,
+                                name: Some(&v.name),
+                                before: before.as_ref(),
+                                after: None,
+                                outcome,
+                                detail: None,
+                            });
+                        }
                         continue;
                     }
                     match key.as_ref().unwrap().delete_value(name) {
-                        Ok(()) => r.values_deleted += 1,
-                        Err(e) => r.failures.push((label, e.to_string())),
+                        Ok(()) => {
+                            r.values_deleted += 1;
+                            if let Some(a) = audit.as_deref_mut() {
+                                a.record(Event {
+                                    op: Op::ValueDelete,
+                                    path: &block.path,
+                                    name: Some(&v.name),
+                                    before: before.as_ref(),
+                                    after: None,
+                                    outcome,
+                                    detail: None,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(a) = audit.as_deref_mut() {
+                                a.record(Event {
+                                    op: Op::ValueDelete,
+                                    path: &block.path,
+                                    name: Some(&v.name),
+                                    before: before.as_ref(),
+                                    after: None,
+                                    outcome: Outcome::Failed,
+                                    detail: Some(&e.to_string()),
+                                });
+                            }
+                            r.failures.push((label, e.to_string()));
+                        }
                     }
                 }
                 other => {
@@ -394,11 +508,48 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
                     };
                     if dry_run {
                         r.values_set += 1;
+                        if let Some(a) = audit.as_deref_mut() {
+                            a.record(Event {
+                                op: Op::ValueSet,
+                                path: &block.path,
+                                name: Some(&v.name),
+                                before: before.as_ref(),
+                                after: Some(other),
+                                outcome,
+                                detail: None,
+                            });
+                        }
                         continue;
                     }
                     match key.as_ref().unwrap().set_value(name, ty, &bytes) {
-                        Ok(()) => r.values_set += 1,
-                        Err(e) => r.failures.push((label, e.to_string())),
+                        Ok(()) => {
+                            r.values_set += 1;
+                            if let Some(a) = audit.as_deref_mut() {
+                                a.record(Event {
+                                    op: Op::ValueSet,
+                                    path: &block.path,
+                                    name: Some(&v.name),
+                                    before: before.as_ref(),
+                                    after: Some(other),
+                                    outcome,
+                                    detail: None,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(a) = audit.as_deref_mut() {
+                                a.record(Event {
+                                    op: Op::ValueSet,
+                                    path: &block.path,
+                                    name: Some(&v.name),
+                                    before: before.as_ref(),
+                                    after: Some(other),
+                                    outcome: Outcome::Failed,
+                                    detail: Some(&e.to_string()),
+                                });
+                            }
+                            r.failures.push((label, e.to_string()));
+                        }
                     }
                 }
             }

@@ -26,6 +26,36 @@ JSON.
 
 ### Added
 
+- **Tamper-evident audit log.** `--audit-log FILE` (or `REGX_AUDIT_LOG`) appends
+  one JSON object per registry mutation: timestamp, actor SID, operation, and
+  the value before as well as after. Records are hash-chained, so altering or
+  removing a line breaks the chain and `regx audit FILE` reports where. A
+  `--dry-run` is recorded as `simulated`, and failed attempts are recorded too.
+- `--audit-redact` records the SHA-256 and length of each value instead of the
+  value, for environments where the log would otherwise become a secret.
+- `regx --version` reports the commit, its date, the target triple and the
+  source URL. The commit date is used rather than the build clock so two builds
+  of the same source are identical; an uncommitted tree reports `-modified`.
+- A release workflow producing x64 and ARM64 binaries with SHA-256 checksums, a
+  CycloneDX SBOM, and a GitHub build provenance attestation. Code signing is
+  wired in and skips cleanly until a certificate is configured, so enabling it
+  is a secrets change rather than a workflow change.
+- SHA-256 implemented in-tree and validated against the NIST vectors, rather
+  than adding a cryptographic dependency for the two places hashing is needed.
+
+### Fixed
+
+- **`--audit-redact` leaked the secret it was supposed to hide.** Values were
+  redacted but the command line recorded in the session header was not, so
+  `regx set … -d SECRET` wrote the secret straight into the log. A redacted log
+  that still contains the secret is worse than none, because it is trusted.
+  Found by an end-to-end check of the feature rather than by its unit tests.
+- The audit verifier reported a UTF-8 BOM as tampering. A log that has been
+  through a Windows editor or a PowerShell redirect commonly gains one, and a
+  false accusation is the worst possible failure for this particular file.
+
+### Added
+
 - `diff` compares any two sources — file to file, file to live registry, or live
   to live — and emits a `.reg` patch that turns the first into the second. A
   drift report is therefore also the fix, and the inverse patch is the rollback.

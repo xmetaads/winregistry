@@ -79,6 +79,8 @@
       <li><a href="#hive">hive</a></li>
       <li><a href="#inspect">inspect</a></li>
       <li><a href="#discover">discover</a></li>
+      <li><a href="#diff">diff</a></li>
+      <li><a href="#audit">audit</a></li>
     </ul>
     <h2>Reference</h2>
     <ul>
@@ -541,6 +543,117 @@ stem        updater
         </p>
       </div>
       <p><code>--strict</code> exits <code>5</code> if any hit carries a risk, so a deployment check can gate on it.</p>
+    </section>
+
+    <!-- ================= DIFF ================= -->
+    <section id="diff">
+      <h2><code>diff</code></h2>
+      <p>
+        Compare any two sources and emit the patch between them. Each side is either a file in any
+        supported format or a live registry key, so file-to-file, file-to-live and live-to-live all
+        work from the same argument positions.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> diff baseline.reg <span class="tok-str">"HKCU\Software\Acme"</span> <span class="tok-flag">--exit-code</span>
+
+~ HKEY_CURRENT_USER\Software\Acme\Channel
+    - stable
+    + beta
++ HKEY_CURRENT_USER\Software\Acme\NewFlag = 0x00000001 (1)
+- HKEY_CURRENT_USER\Software\Acme\Retries = 0x00000003 (3)
+
+1 added, 1 modified, 1 removed</code></pre>
+      </div>
+      <p>
+        The patch written by <code>-o</code> turns <strong>A into B</strong>. So a drift report is
+        also the fix, and swapping the arguments produces the rollback.
+        <code>--exit-code</code> exits <code>5</code> when the two sides differ, which makes it
+        usable as a deployment gate.
+      </p>
+      <p>
+        Comparison is case-insensitive on key paths and value names, because the registry is, but
+        byte-exact on data: a <code>REG_SZ</code> and a <code>REG_EXPAND_SZ</code> holding the same
+        characters are a difference, not a match, since one is expanded by the consuming application
+        and the other is not.
+      </p>
+    </section>
+
+    <!-- ================= AUDIT ================= -->
+    <section id="audit">
+      <h2><code>audit</code> and the audit trail</h2>
+      <p>
+        A tool that changes the registry and leaves no attributable record of what it changed cannot
+        be deployed in a managed environment. <code>--audit-log</code> appends one JSON object per
+        mutation — timestamp, actor SID, operation, <strong>before and after</strong> — to a file you
+        nominate.
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-audit">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-audit"><span class="tok-dim"># Every change recorded, then verified</span>
+regx import app.reg <span class="tok-flag">--audit-log</span> <span class="tok-str">"C:\logs\regx.jsonl"</span>
+regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
+
+  records   7
+  sessions  3
+  sha256    78992f9622a90cd781a9cb442c6251105548f420e13dbc5abeef4c92a0a7469c
+
+  Chain intact: no record has been altered or removed.</code></pre>
+      </div>
+
+      <p>
+        Set <code>REGX_AUDIT_LOG</code> to enforce it machine-wide, so an individual invocation
+        cannot skip the trail by forgetting the flag. <code>REGX_AUDIT_REDACT</code> does the same
+        for redaction.
+      </p>
+
+      <h3>Why the records are chained</h3>
+      <p>
+        A log an attacker can quietly edit is not evidence. Every record carries the SHA-256 of the
+        previous record, so altering or removing a line breaks the chain from that point and
+        <code>regx audit</code> reports the line number and what it expected.
+      </p>
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        <p>
+          <strong>What this does and does not give you.</strong> It makes silent tampering
+          detectable. It does <em>not</em> stop someone truncating the tail or rewriting the file
+          wholesale — nothing held locally can, without a key the operator does not have. Ship the
+          log somewhere append-only for that half of the problem. The chain is what turns
+          "someone may have edited this" into "this line was edited".
+        </p>
+      </div>
+
+      <h3>Redaction</h3>
+      <p>
+        Registry values hold licence keys, tokens and connection strings, so a log that faithfully
+        records every byte written becomes a secret in its own right.
+        <code>--audit-redact</code> records the SHA-256 and byte length of each value instead of the
+        value — still enough to prove a specific value was written, or to compare two runs.
+      </p>
+      <p>
+        Redaction covers the recorded command line too. <code>regx set … -d SECRET</code> would
+        otherwise put the secret straight into the session header, which is exactly the hole an
+        early version of this had: the values were redacted and the command line was not.
+      </p>
+      <p>
+        A <code>--dry-run</code> is recorded with outcome <code>simulated</code>, so a rehearsal is
+        distinguishable from the real thing in the record. Failed operations are recorded too, with
+        the error — an attempt that was denied is as much a part of the trail as one that succeeded.
+      </p>
     </section>
 
     <!-- ================= FORMATS ================= -->

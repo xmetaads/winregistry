@@ -368,6 +368,68 @@ unsafe extern "system" {
     ) -> i32;
     fn GetSidSubAuthorityCount(sid: *mut u8) -> *mut u8;
     fn GetSidSubAuthority(sid: *mut u8, index: u32) -> *mut u32;
+    fn ConvertSidToStringSidW(sid: *mut u8, out: *mut *mut u16) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LocalFree(mem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+}
+
+const TOKEN_USER: u32 = 1;
+
+/// The SID of the account this process runs as, in `S-1-5-21-…` form.
+///
+/// The audit log records it alongside `%USERDOMAIN%\%USERNAME%` because those
+/// two environment variables are trivially settable by whoever launched the
+/// process, whereas the token's SID is not. A record has to be attributable to
+/// an account, not to a string the actor chose.
+pub fn current_user_sid() -> Option<String> {
+    let t = Token::open()?;
+
+    let mut len: u32 = 0;
+    // SAFETY: the probe call with a null buffer reports the size required.
+    unsafe {
+        GetTokenInformation(t.0, TOKEN_USER, std::ptr::null_mut(), 0, &mut len);
+    }
+    if len == 0 {
+        return None;
+    }
+
+    let mut buf = vec![0u8; len as usize];
+    // SAFETY: `buf` has `len` writable bytes, the size the probe asked for.
+    let ok = unsafe { GetTokenInformation(t.0, TOKEN_USER, buf.as_mut_ptr(), len, &mut len) };
+    if ok == 0 {
+        return None;
+    }
+
+    // TOKEN_USER is a SID_AND_ATTRIBUTES; the SID pointer comes first.
+    // SAFETY: the buffer was filled by the API with that layout, and `sid`
+    // points into `buf`, which outlives this block.
+    let sid = unsafe { *(buf.as_ptr() as *const *mut u8) };
+    if sid.is_null() {
+        return None;
+    }
+
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: `sid` is a valid SID; on success the API allocates the string
+    // with LocalAlloc, which is why it is released with LocalFree below.
+    let ok = unsafe { ConvertSidToStringSidW(sid, &mut raw) };
+    if ok == 0 || raw.is_null() {
+        return None;
+    }
+
+    // SAFETY: `raw` is a NUL-terminated wide string owned by us until LocalFree.
+    let text = unsafe {
+        let mut n = 0usize;
+        while *raw.add(n) != 0 {
+            n += 1;
+        }
+        let s = String::from_utf16_lossy(std::slice::from_raw_parts(raw, n));
+        LocalFree(raw as *mut core::ffi::c_void);
+        s
+    };
+    Some(text)
 }
 
 struct Token(*mut std::ffi::c_void);

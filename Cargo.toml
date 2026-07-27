@@ -6,7 +6,9 @@ rust-version = "1.82"
 description = "Portable, non-admin Windows Registry CLI"
 
 [dependencies]
-clap = { version = "4", features = ["derive", "wrap_help"] }
+# "env" lets the audit log be turned on machine-wide through REGX_AUDIT_LOG
+# rather than relying on every invocation remembering the flag.
+clap = { version = "4", features = ["derive", "wrap_help", "env"] }
 anyhow = "1"
 
 [profile.release]

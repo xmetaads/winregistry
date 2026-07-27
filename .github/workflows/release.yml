@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (must already exist)
+        required: true
+
+permissions:
+  contents: write
+  # Required for the build provenance attestation below.
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            needs_toolchain: false
+          - arch: aarch64
+            target: aarch64-pc-windows-msvc
+            needs_toolchain: true
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # The build embeds the commit and its date, so the full history has
+          # to be present or --version reports "unknown".
+          fetch-depth: 0
+
+      - name: Install the ARM64 MSVC toolchain
+        if: matrix.needs_toolchain
+        shell: pwsh
+        run: |
+          $root = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $path = & "$root\vswhere.exe" -latest -property installationPath
+          & "$root\vs_installer.exe" modify --installPath $path --quiet --norestart --nocache `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 | Out-Null
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            throw "failed to install the ARM64 toolchain (exit $LASTEXITCODE)"
+          }
+
+      # No toolchain named: rustup reads the pin in rust-toolchain.toml, so a
+      # release is built with the same compiler CI and developers use.
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify the binary keeps its promises
+        shell: pwsh
+        run: |
+          $exe = "target/${{ matrix.target }}/release/regx.exe"
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($exe))
+
+          if ($text -notmatch 'requestedExecutionLevel\s+level="asInvoker"') {
+            throw "the asInvoker manifest is not embedded"
+          }
+          if ($text -match 'level="requireAdministrator"' -or $text -match 'level="highestAvailable"') {
+            throw "the binary requests elevation"
+          }
+          foreach ($dll in @("VCRUNTIME140", "MSVCP140", "api-ms-win-crt")) {
+            if ($text -match [regex]::Escape($dll)) {
+              throw "$dll is imported: the CRT is not statically linked"
+            }
+          }
+          "asInvoker, no elevation, static CRT"
+
+      # Signing is the single largest barrier to enterprise adoption: AppLocker
+      # and WDAC judge a publisher, and an unsigned binary is blocked no matter
+      # where it sits. The step is wired up and skips cleanly until a
+      # certificate is configured, so enabling it is a secrets change, not a
+      # workflow change.
+      - name: Sign
+        if: env.SIGNING_CERT != ''
+        env:
+          SIGNING_CERT: ${{ secrets.SIGNING_CERT_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT))
+          try {
+            # /tr is not optional: without a timestamp the signature stops
+            # validating the day the certificate expires.
+            & signtool sign /f $pfx /p $env:SIGNING_PASSWORD `
+              /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+              "target/${{ matrix.target }}/release/regx.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+            & signtool verify /pa /v "target/${{ matrix.target }}/release/regx.exe"
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Report signing status
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "target/${{ matrix.target }}/release/regx.exe"
+          if ($sig.Status -eq "Valid") {
+            "signed: $($sig.SignerCertificate.Subject)"
+          } else {
+            "::warning::This release is UNSIGNED ($($sig.Status)). AppLocker, WDAC and " +
+            "SmartScreen will block or warn on it. Configure SIGNING_CERT_BASE64 and " +
+            "SIGNING_CERT_PASSWORD to sign."
+          }
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          $dir = "dist"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $name = "regx-${{ matrix.arch }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/regx.exe" "$dir/$name"
+          $h = (Get-FileHash "$dir/$name" -Algorithm SHA256).Hash.ToLower()
+          "$h  $name" | Out-File "$dir/$name.sha256" -Encoding ascii
+          "$name  $h"
+
+      - name: Build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/regx-${{ matrix.arch }}.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regx-${{ matrix.arch }}
+          path: dist/*
+
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+
+      # A software bill of materials is a procurement checklist item, and with
+      # two direct dependencies it is short enough to actually read.
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --format json --spec-version 1.5
+          mkdir -p dist
+          find . -name "*.cdx.json" -exec cp {} dist/regx.cdx.json \;
+          test -s dist/regx.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: dist/regx.cdx.json
+
+  publish:
+    name: Publish
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect and combine checksums
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name "*.exe" -o -name "*.cdx.json" \) -exec cp {} dist/ \;
+          cd dist
+          sha256sum *.exe *.cdx.json > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract the release notes for this tag
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          # Everything between this version's heading and the next one.
+          awk -v tag="${TAG#v}" '
+            $0 ~ "^## \\[" tag "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > dist/NOTES.md
+          if [ ! -s dist/NOTES.md ]; then
+            echo "No CHANGELOG entry for $TAG." > dist/NOTES.md
+          fi
+          cat dist/NOTES.md
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: dist/NOTES.md
+          files: |
+            dist/*.exe
+            dist/*.cdx.json
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

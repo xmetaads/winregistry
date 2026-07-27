@@ -1,3 +1,4 @@
+mod audit;
 mod cli;
 mod coalesce;
 mod diff;
@@ -11,6 +12,7 @@ mod model;
 mod parser;
 mod redirect;
 mod selfcheck;
+mod sha256;
 mod undo;
 mod winreg;
 mod writer;
@@ -103,12 +105,14 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             no_backup,
         } => cmd_import(
             cli,
-            files,
-            input,
-            redirect,
-            backup.as_deref(),
-            *no_backup,
-            false,
+            ImportJob {
+                files,
+                input,
+                redirect,
+                backup: backup.as_deref(),
+                no_backup: *no_backup,
+                prune: false,
+            },
         ),
         Command::Sync {
             file,
@@ -117,14 +121,17 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             prune,
         } => cmd_import(
             cli,
-            std::slice::from_ref(file),
-            input,
-            redirect,
-            None,
-            false,
-            *prune,
+            ImportJob {
+                files: std::slice::from_ref(file),
+                input,
+                redirect,
+                backup: None,
+                no_backup: false,
+                prune: *prune,
+            },
         ),
         Command::Formats => cmd_formats(cli),
+        Command::Audit { file, verbose } => cmd_audit(cli, file, *verbose),
         Command::Inspect { files, input } => cmd_inspect(cli, files, input),
         Command::Discover {
             target,
@@ -293,6 +300,36 @@ fn reg_exit(e: &winreg::Error) -> i32 {
     } else {
         exit::IO
     }
+}
+
+/// Open the audit log if one was requested.
+///
+/// Failing to open it aborts the command rather than proceeding unlogged: an
+/// operator who asked for an audit trail has to be able to rely on getting one,
+/// and silently continuing would be the worst outcome of the three.
+fn open_audit(cli: &Cli, command: &str) -> anyhow::Result<Option<audit::Logger>> {
+    let Some(path) = &cli.global.audit_log else {
+        return Ok(None);
+    };
+    let logger = audit::Logger::open(path, cli.global.audit_redact, command)
+        .with_context(|| format!("cannot open the audit log {}", path.display()))?;
+    if cli.global.log_level >= LogLevel::Info {
+        eprintln!(
+            "regx: audit log -> {}{}",
+            path.display(),
+            if cli.global.audit_redact {
+                " (values redacted to digests)"
+            } else {
+                ""
+            }
+        );
+    }
+    Ok(Some(logger))
+}
+
+/// The command line as recorded in the audit log.
+fn command_line() -> String {
+    std::env::args().collect::<Vec<_>>().join(" ")
 }
 
 fn parse_key(s: &str) -> anyhow::Result<RegPath> {
@@ -600,15 +637,28 @@ fn cmd_merge(cli: &Cli, files: &[PathBuf], out: Option<&Path>) -> anyhow::Result
 // import / sync
 // ---------------------------------------------------------------------------
 
-fn cmd_import(
-    cli: &Cli,
-    files: &[PathBuf],
-    iopts: &cli::InputOpts,
-    ropts: &RedirectOpts,
-    backup: Option<&Path>,
+/// Everything `import` and `sync` need. They differ only in `prune` and in
+/// whether an undo snapshot path was given, so they share one implementation;
+/// grouping the arguments keeps that shared function readable.
+struct ImportJob<'a> {
+    files: &'a [PathBuf],
+    input: &'a cli::InputOpts,
+    redirect: &'a RedirectOpts,
+    backup: Option<&'a Path>,
     no_backup: bool,
     prune: bool,
-) -> anyhow::Result<i32> {
+}
+
+fn cmd_import(cli: &Cli, job: ImportJob<'_>) -> anyhow::Result<i32> {
+    let ImportJob {
+        files,
+        input: iopts,
+        redirect: ropts,
+        backup,
+        no_backup,
+        prune,
+    } = job;
+
     let mut all = Vec::new();
     for p in files {
         all.extend(read_any(cli, p, iopts)?.file.keys);
@@ -676,7 +726,8 @@ fn cmd_import(
         return Ok(exit::OK);
     }
 
-    let rep = engine::apply(&roots, &file, view, cli.global.dry_run);
+    let mut logger = open_audit(cli, &command_line())?;
+    let rep = engine::apply_audited(&roots, &file, view, cli.global.dry_run, logger.as_mut());
     print_apply(cli, &rep);
 
     Ok(if !rep.failures.is_empty() {
@@ -926,7 +977,14 @@ fn cmd_set(
     }
 
     let roots = Roots::live();
-    let rep = engine::apply(&roots, &file, view_of(&cli.global), cli.global.dry_run);
+    let mut logger = open_audit(cli, &command_line())?;
+    let rep = engine::apply_audited(
+        &roots,
+        &file,
+        view_of(&cli.global),
+        cli.global.dry_run,
+        logger.as_mut(),
+    );
     print_apply(cli, &rep);
     Ok(if rep.failures.is_empty() {
         exit::OK
@@ -978,7 +1036,14 @@ fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> any
         keys: vec![block],
     };
     let roots = Roots::live();
-    let rep = engine::apply(&roots, &file, view_of(&cli.global), cli.global.dry_run);
+    let mut logger = open_audit(cli, &command_line())?;
+    let rep = engine::apply_audited(
+        &roots,
+        &file,
+        view_of(&cli.global),
+        cli.global.dry_run,
+        logger.as_mut(),
+    );
     print_apply(cli, &rep);
     Ok(if rep.failures.is_empty() {
         exit::OK
@@ -1439,6 +1504,69 @@ const FORMAT_TABLE: &[(&str, &str, &str)] = &[
         "not read here - use `regx hive <FILE>`",
     ),
 ];
+
+fn cmd_audit(cli: &Cli, file: &Path, verbose: bool) -> anyhow::Result<i32> {
+    let v = audit::verify(file)
+        .with_context(|| format!("cannot read the audit log {}", file.display()))?;
+
+    if cli.global.output == OutputFormat::Json {
+        let broken: Vec<String> = v
+            .broken
+            .iter()
+            .map(|(line, why)| format!("    {{\"line\": {line}, \"problem\": {}}}", jstr(why)))
+            .collect();
+        println!(
+            "{{\n  \"file\": {},\n  \"records\": {},\n  \"sessions\": {},\n  \"intact\": {},\n  \"broken\": [\n{}\n  ]\n}}",
+            jstr(&file.display().to_string()),
+            v.records,
+            v.sessions,
+            v.is_intact(),
+            broken.join(",\n")
+        );
+        return Ok(if v.is_intact() {
+            exit::OK
+        } else {
+            exit::PARTIAL
+        });
+    }
+
+    println!("{}", file.display());
+    println!("  records   {}", v.records);
+    println!("  sessions  {}", v.sessions);
+    if let Ok(d) = audit::file_digest(file) {
+        println!("  sha256    {d}");
+    }
+
+    if v.is_intact() {
+        println!("\n  Chain intact: no record has been altered or removed.");
+    } else {
+        println!("\n  CHAIN BROKEN at {} point(s):", v.broken.len());
+        for (line, why) in &v.broken {
+            println!("    line {line}: {why}");
+        }
+        println!(
+            "\n  A break means the file was changed after it was written. The records\n\
+             \x20 before the first break are still trustworthy; those after it are not."
+        );
+    }
+
+    if verbose {
+        let text = std::fs::read_to_string(file)?;
+        println!();
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            println!("  {:>4}  {}", i + 1, line);
+        }
+    }
+
+    Ok(if v.is_intact() {
+        exit::OK
+    } else {
+        exit::PARTIAL
+    })
+}
 
 fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
     if cli.global.output == OutputFormat::Json {

@@ -656,6 +656,174 @@ fn discover_finds_the_sidecar_and_flags_nothing_when_clean() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_mutation_is_logged_and_the_chain_verifies() {
+    let key = LiveKey::new("audit");
+    let sc = Scratch::new("audit");
+    let log = sc.path("audit.jsonl");
+
+    for args in [
+        vec!["set", key.as_str(), "-v", "Channel", "-d", "stable", "-y"],
+        vec!["set", key.as_str(), "-v", "Channel", "-d", "beta", "-y"],
+        vec!["delete", key.as_str(), "-v", "Channel", "-y"],
+    ] {
+        let mut full = args.clone();
+        full.push("--audit-log");
+        let l = s(&log);
+        full.push(&l);
+        assert_eq!(code(&run(&full)), OK, "{}", stderr(&run(&full)));
+    }
+
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("\"event\": \"key.create\""), "{text}");
+    assert!(text.contains("\"event\": \"value.set\""), "{text}");
+    assert!(text.contains("\"event\": \"value.delete\""), "{text}");
+    // The prior value must be recorded, not just the new one.
+    assert!(
+        text.contains("stable"),
+        "the replaced value was not recorded: {text}"
+    );
+
+    let v = run(&["audit", &s(&log)]);
+    assert_eq!(code(&v), OK, "{}", stdout(&v));
+    assert!(stdout(&v).contains("Chain intact"), "{}", stdout(&v));
+}
+
+#[test]
+fn tampering_with_the_log_is_detected() {
+    let key = LiveKey::new("audittamper");
+    let sc = Scratch::new("audittamper");
+    let log = sc.path("audit.jsonl");
+
+    run(&[
+        "set",
+        key.as_str(),
+        "-v",
+        "Channel",
+        "-d",
+        "stable",
+        "-y",
+        "--audit-log",
+        &s(&log),
+    ]);
+    assert_eq!(code(&run(&["audit", &s(&log)])), OK);
+
+    // Bytes only: no re-encoding, so this is the tamper and nothing else.
+    let bytes = std::fs::read(&log).unwrap();
+    std::fs::write(
+        &log,
+        String::from_utf8(bytes)
+            .unwrap()
+            .replace("stable", "PWNED!"),
+    )
+    .unwrap();
+
+    let v = run(&["audit", &s(&log)]);
+    assert_eq!(code(&v), PARTIAL, "an edited log must not verify");
+    assert!(stdout(&v).contains("CHAIN BROKEN"), "{}", stdout(&v));
+}
+
+#[test]
+fn redaction_keeps_the_secret_out_of_the_log_entirely() {
+    let key = LiveKey::new("auditredact");
+    let sc = Scratch::new("auditredact");
+    let log = sc.path("audit.jsonl");
+    let secret = "SECRET-LICENCE-9Q4Z";
+
+    let o = run(&[
+        "set",
+        key.as_str(),
+        "-v",
+        "Licence",
+        "-d",
+        secret,
+        "-y",
+        "--audit-log",
+        &s(&log),
+        "--audit-redact",
+    ]);
+    assert_eq!(code(&o), OK, "{}", stderr(&o));
+
+    let text = std::fs::read_to_string(&log).unwrap();
+    // The value is redacted, and so is the command line that carried it —
+    // the session header is where this leaked before.
+    assert!(
+        !text.contains(secret),
+        "the secret leaked into the log:\n{text}"
+    );
+    assert!(text.contains("sha256"), "no digest recorded: {text}");
+    assert!(
+        text.contains("<redacted:"),
+        "the command line was not redacted: {text}"
+    );
+    // Redaction must not cost the audit its usefulness.
+    assert!(text.contains("Licence"), "the value name was lost: {text}");
+    assert_eq!(code(&run(&["audit", &s(&log)])), OK);
+}
+
+#[test]
+fn a_dry_run_is_logged_as_simulated_and_changes_nothing() {
+    let key = LiveKey::new("auditdry");
+    let sc = Scratch::new("auditdry");
+    let log = sc.path("audit.jsonl");
+
+    let o = run(&[
+        "set",
+        key.as_str(),
+        "-v",
+        "x",
+        "-d",
+        "y",
+        "-y",
+        "--dry-run",
+        "--audit-log",
+        &s(&log),
+    ]);
+    assert_eq!(code(&o), OK);
+
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("\"outcome\": \"simulated\""), "{text}");
+    assert_eq!(
+        code(&run(&["query", key.as_str()])),
+        NOT_FOUND,
+        "--dry-run wrote to the registry despite logging"
+    );
+}
+
+#[test]
+fn the_audit_log_can_be_enforced_through_the_environment() {
+    let key = LiveKey::new("auditenv");
+    let sc = Scratch::new("auditenv");
+    let log = sc.path("audit.jsonl");
+
+    // A machine-wide policy sets REGX_AUDIT_LOG; individual invocations must
+    // not have to remember the flag for the trail to exist.
+    let o = Command::new(bin())
+        .args(["set", key.as_str(), "-v", "x", "-d", "y", "-y"])
+        .env("REGX_AUDIT_LOG", &log)
+        .output()
+        .expect("failed to launch regx");
+    assert_eq!(code(&o), OK, "{}", stderr(&o));
+    assert!(log.exists(), "REGX_AUDIT_LOG was ignored");
+    assert_eq!(code(&run(&["audit", &s(&log)])), OK);
+}
+
+#[test]
+fn version_reports_build_provenance() {
+    let o = run(&["--version"]);
+    let text = stdout(&o);
+    for field in ["commit:", "date:", "target:", "source:"] {
+        assert!(
+            text.contains(field),
+            "--version is missing {field}:\n{text}"
+        );
+    }
+}
+
 #[test]
 fn self_check_runs_and_reports_the_process_as_unelevated() {
     let o = run(&["--self-check"]);

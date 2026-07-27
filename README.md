@@ -36,6 +36,8 @@ used only when designing site pages. Reinstall it with
 | `convert <FILE>` | Read any supported format and write `.reg`. Never touches the registry |
 | `inspect <FILE...>` | Report a file's format and contents without applying it |
 | `discover [EXE_OR_DIR]` | Find an application's companion config files the way the application would, and flag the risky rungs |
+| `diff <A> <B>` | Compare two files, or a file against the live registry, and emit the patch between them |
+| `audit <FILE>` | Verify that an audit log has not been edited or had records removed |
 | `formats` | List the input formats and how each is detected |
 | `merge <FILE...>` | Combine `.reg` files, last write wins |
 | `query <KEY>` | Read values |
@@ -97,6 +99,57 @@ A `Registry.pol` stores no hive of its own: the same bytes mean HKLM under
 to `--pol-root`.
 
 ---
+
+## Audit trail
+
+A tool that changes the registry and leaves no attributable record of what it
+changed cannot be deployed in a managed environment. `--audit-log` appends one
+JSON object per mutation — timestamp, actor SID, operation, **before and after** —
+to a file you nominate.
+
+```bash
+regx import app.reg --audit-log C:\logs\regx.jsonl
+regx audit C:\logs\regx.jsonl          # verify it has not been touched
+```
+
+Set `REGX_AUDIT_LOG` to enforce it machine-wide, so an individual invocation
+cannot skip the trail by forgetting the flag.
+
+**The records are hash-chained.** Each carries the SHA-256 of the one before it,
+so altering or removing a line breaks the chain from that point and `regx audit`
+reports the line. This does not stop someone rewriting the whole file — nothing
+local can, without a key the operator does not hold — but it turns silent
+tampering into a detectable event, which is the property auditors ask for. Ship
+the file somewhere append-only for the rest.
+
+**`--audit-redact`** records the SHA-256 of each value instead of the value.
+Registry data holds licence keys and connection strings; without this the log
+becomes a secret in its own right. Redaction covers the recorded command line
+too — `regx set … -d SECRET` would otherwise put the secret straight into the
+session header, which is exactly the hole an early version of this had.
+
+A `--dry-run` is logged as `simulated`, so a rehearsal is distinguishable from
+the real thing in the record.
+
+## Build provenance
+
+```
+$ regx --version
+regx 0.1.0
+commit:  2e212936c6af
+date:    2026-07-28T03:59:11+07:00
+target:  x86_64-pc-windows-msvc
+licence: MIT
+source:  https://github.com/xmetaads/winregistry
+```
+
+The commit date is used rather than the build clock, so two builds of the same
+source are identical. A working tree with uncommitted changes is reported as
+`<commit>-modified`.
+
+Releases carry a SHA-256 beside each binary, a CycloneDX SBOM, and a GitHub
+build provenance attestation. **They are not yet code-signed** — see
+[SECURITY.md](SECURITY.md) and the AppLocker section of the docs.
 
 ## Companion-file discovery
 

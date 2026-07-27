@@ -4,10 +4,27 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// Build provenance, shown by `regx --version`.
+///
+/// An operator who finds this executable on a machine can tell which source
+/// produced it without trusting the file name.
+pub const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\ncommit:  ",
+    env!("REGX_COMMIT"),
+    "\ndate:    ",
+    env!("REGX_COMMIT_DATE"),
+    "\ntarget:  ",
+    env!("REGX_TARGET"),
+    "\nlicence: MIT",
+    "\nsource:  https://github.com/xmetaads/winregistry",
+);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "regx",
     version,
+    long_version = LONG_VERSION,
     about = "Portable, non-admin Windows Registry CLI",
     long_about = "regx reads, converts and merges .reg files offline and applies them to \
                   HKEY_CURRENT_USER live. It never requests elevation: the executable is \
@@ -52,6 +69,17 @@ pub struct GlobalOpts {
     /// Disable ANSI colour.
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    /// Append a tamper-evident record of every registry change to this file.
+    /// Also settable as REGX_AUDIT_LOG so it can be enforced machine-wide.
+    #[arg(long, global = true, value_name = "FILE", env = "REGX_AUDIT_LOG")]
+    pub audit_log: Option<PathBuf>,
+
+    /// Record the SHA-256 of each value instead of the value itself. Registry
+    /// data holds licence keys and tokens; without this the log becomes a
+    /// secret in its own right.
+    #[arg(long, global = true, env = "REGX_AUDIT_REDACT")]
+    pub audit_redact: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, ValueEnum)]
@@ -339,6 +367,19 @@ pub enum Command {
 
     /// List the input formats regx can read, and how each is detected.
     Formats,
+
+    /// Verify that an audit log has not been edited or had records removed.
+    ///
+    /// Each record carries the hash of the one before it, so an alteration
+    /// anywhere breaks the chain from that point and is reported by line.
+    Audit {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Print each record's key and outcome as well as the verdict.
+        #[arg(long, short = 'v')]
+        verbose: bool,
+    },
 
     /// Find an application's companion configuration files the way the
     /// application itself would, and report the search order and its risks.
