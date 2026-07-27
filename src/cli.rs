@@ -128,6 +128,14 @@ pub struct InputOpts {
     /// Read only this [AddReg]/[DelReg] section of an INF.
     #[arg(long, value_name = "SECTION")]
     pub inf_section: Option<String>,
+
+    /// Which state of an ADMX policy to render. A template declares both.
+    #[arg(long, value_name = "STATE", default_value = "enabled")]
+    pub admx_state: String,
+
+    /// Render only this named policy from an ADMX.
+    #[arg(long, value_name = "NAME")]
+    pub admx_policy: Option<String>,
 }
 
 /// Shared by every command that can rewrite HKLM paths.
@@ -318,6 +326,32 @@ pub enum Command {
 
     /// List the input formats regx can read, and how each is detected.
     Formats,
+
+    /// Find an application's companion configuration files the way the
+    /// application itself would, and report the search order and its risks.
+    ///
+    /// Pass an executable to anchor on it, a directory to anchor on that, or
+    /// nothing to anchor on the current directory.
+    Discover {
+        #[arg(value_name = "EXE_OR_DIR")]
+        target: Option<PathBuf>,
+
+        /// Also enumerate the machine's Group Policy caches and PolicyDefinitions.
+        #[arg(long)]
+        policy: bool,
+
+        /// Follow the HKCU/HKLM\Software\<stem> ConfigPath convention.
+        #[arg(long)]
+        registry_pointer: bool,
+
+        /// List every path probed, not just the hits.
+        #[arg(long, short = 'v')]
+        verbose: bool,
+
+        /// Exit non-zero if any hit carries a security risk.
+        #[arg(long)]
+        strict: bool,
+    },
 
     /// Report the format of a file and what it contains, without applying it.
     Inspect {

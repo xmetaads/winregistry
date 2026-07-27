@@ -7,7 +7,9 @@
 //! coalescing, undo snapshots and apply all work on them unchanged — a new
 //! format costs one parser, not a parallel pipeline.
 
+pub mod admx;
 pub mod csv;
+pub mod gpp;
 pub mod ini;
 pub mod inf;
 pub mod json;
@@ -28,6 +30,10 @@ pub enum Format {
     Json,
     Csv,
     Ini,
+    /// Group Policy administrative template (`.admx`, with `.adml` strings).
+    Admx,
+    /// Group Policy Preferences `Registry.xml`.
+    Gpp,
     /// A raw hive file. Not read here — that is `regx hive`.
     Hive,
 }
@@ -41,6 +47,8 @@ impl Format {
             Format::Json => "json",
             Format::Csv => "csv",
             Format::Ini => "ini",
+            Format::Admx => "admx",
+            Format::Gpp => "gpp",
             Format::Hive => "hive",
         }
     }
@@ -53,6 +61,8 @@ impl Format {
             "json" => Format::Json,
             "csv" | "tsv" => Format::Csv,
             "ini" | "cfg" | "conf" => Format::Ini,
+            "admx" | "adml" | "template" => Format::Admx,
+            "gpp" | "preferences" => Format::Gpp,
             "hive" | "dat" => Format::Hive,
             _ => return None,
         })
@@ -74,6 +84,10 @@ pub struct ReadOptions {
     pub pol_root: Hive,
     /// Restrict an INF to one `[AddReg]` section instead of every one found.
     pub inf_section: Option<String>,
+    /// Which state of an ADMX policy to render. An ADMX declares both.
+    pub admx_state: admx::State,
+    /// Restrict an ADMX to a single named policy.
+    pub admx_policy: Option<String>,
 }
 
 impl Default for ReadOptions {
@@ -81,6 +95,8 @@ impl Default for ReadOptions {
         ReadOptions {
             pol_root: Hive::Hklm,
             inf_section: None,
+            admx_state: admx::State::Enabled,
+            admx_policy: None,
         }
     }
 }
@@ -116,6 +132,16 @@ pub fn detect(bytes: &[u8], path: Option<&Path>) -> Format {
     if trimmed.starts_with('{') || trimmed.starts_with('[') && looks_like_json_array(trimmed) {
         return Format::Json;
     }
+    // Both XML dialects are identified by their root element, not the file name:
+    // GPP files are always called Registry.xml, and an ADMX may be renamed.
+    if trimmed.starts_with("<?xml") || trimmed.starts_with('<') {
+        if lower.contains("<policydefinitions") {
+            return Format::Admx;
+        }
+        if lower.contains("<registrysettings") || lower.contains("clsid=\"{9cd4b2f4") {
+            return Format::Gpp;
+        }
+    }
     // An INF is an INI with a [Version] section and at least one AddReg/DelReg
     // directive; checking both avoids claiming every INI file.
     if lower.contains("[version]") && (lower.contains("addreg") || lower.contains("delreg")) {
@@ -130,6 +156,9 @@ pub fn detect(bytes: &[u8], path: Option<&Path>) -> Format {
             "json" => Format::Json,
             "csv" | "tsv" => Format::Csv,
             "ini" | "cfg" | "conf" => Format::Ini,
+            "admx" | "adml" => Format::Admx,
+            // A bare .xml that reached here matched neither root element above.
+            "xml" => Format::Gpp,
             "dat" | "hiv" | "hive" => Format::Hive,
             _ => sniff_text(&head),
         },
@@ -196,6 +225,8 @@ pub fn read(bytes: &[u8], path: Option<&Path>, forced: Option<Format>, opts: &Re
         Format::Json => json::read(bytes)?,
         Format::Csv => csv::read(bytes)?,
         Format::Ini => ini::read(bytes)?,
+        Format::Admx => admx::read(bytes, path, opts.admx_state, opts.admx_policy.as_deref())?,
+        Format::Gpp => gpp::read(bytes)?,
         Format::Hive => {
             return Err(
                 "this is a registry hive file, not a text format. Use `regx hive <FILE> ...` \

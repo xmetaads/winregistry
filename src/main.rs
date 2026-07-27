@@ -1,5 +1,6 @@
 mod cli;
 mod coalesce;
+mod discover;
 mod encoding;
 mod engine;
 mod fix;
@@ -12,6 +13,7 @@ mod selfcheck;
 mod undo;
 mod winreg;
 mod writer;
+mod xml;
 
 use anyhow::{anyhow, Context};
 use clap::Parser as _;
@@ -92,6 +94,13 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         ),
         Command::Formats => cmd_formats(cli),
         Command::Inspect { files, input } => cmd_inspect(cli, files, input),
+        Command::Discover {
+            target,
+            policy,
+            registry_pointer,
+            verbose,
+            strict,
+        } => cmd_discover(cli, target.as_deref(), *policy, *registry_pointer, *verbose, *strict),
         Command::Export {
             key,
             out,
@@ -153,6 +162,10 @@ fn read_options(o: &cli::InputOpts) -> anyhow::Result<formats::ReadOptions> {
             .ok_or_else(|| anyhow!("--pol-root {h:?} is not a hive name (try HKLM or HKCU)"))?;
     }
     opts.inf_section = o.inf_section.clone();
+    opts.admx_state = formats::admx::State::parse(&o.admx_state).ok_or_else(|| {
+        anyhow!("--admx-state {:?} is not 'enabled' or 'disabled'", o.admx_state)
+    })?;
+    opts.admx_policy = o.admx_policy.clone();
     Ok(opts)
 }
 
@@ -1240,6 +1253,8 @@ fn split_argv(s: &str) -> Vec<String> {
 const FORMAT_TABLE: &[(&str, &str, &str)] = &[
     ("reg",  ".reg",          "regedit's own text format, UTF-16 or ANSI REGEDIT4"),
     ("pol",  "Registry.pol",  "Group Policy PReg binary; **del./**DeleteValues directives honoured"),
+    ("admx", ".admx + .adml", "policy template; concrete enabled/disabled values, elements reported"),
+    ("gpp",  "Registry.xml",  "Group Policy Preferences; actions C/R/U/D, Collections traversed"),
     ("inf",  ".inf",          "[AddReg]/[DelReg] sections, with [Strings] token substitution"),
     ("json", ".json",         "compact {path: {name: value}} or explicit {\"keys\": [...]}"),
     ("csv",  ".csv / .tsv",   "header row naming key, name, type, data in any order"),
@@ -1272,6 +1287,110 @@ fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
          User\\ path component, or set with --pol-root."
     );
     Ok(exit::OK)
+}
+
+fn cmd_discover(
+    cli: &Cli,
+    target: Option<&Path>,
+    policy: bool,
+    registry_pointer: bool,
+    verbose: bool,
+    strict: bool,
+) -> anyhow::Result<i32> {
+    let target = match target {
+        Some(t) => t.to_path_buf(),
+        None => std::env::current_dir().context("cannot read the current directory")?,
+    };
+
+    let opts = discover::Options {
+        policy,
+        registry_pointer,
+        verbose,
+    };
+    let r = discover::discover(&target, &opts).map_err(|e| anyhow!(e))?;
+
+    if cli.global.output == OutputFormat::Json {
+        let items: Vec<String> = r
+            .found
+            .iter()
+            .map(|f| {
+                let risks: Vec<String> = f
+                    .risks
+                    .iter()
+                    .map(|x| jstr(&format!("{x:?}")))
+                    .collect();
+                format!(
+                    "    {{\"path\": {}, \"origin\": {}, \"rank\": {}, \"format\": {}, \
+                     \"size\": {}, \"risks\": [{}]}}",
+                    jstr(&f.path.display().to_string()),
+                    jstr(&f.origin.label()),
+                    f.origin.rank(),
+                    match f.format {
+                        Some(fmt) => jstr(fmt.name()),
+                        None => "null".into(),
+                    },
+                    f.size,
+                    risks.join(", ")
+                )
+            })
+            .collect();
+        println!(
+            "{{\n  \"anchor\": {},\n  \"stem\": {},\n  \"found\": [\n{}\n  ]\n}}",
+            jstr(&r.anchor.display().to_string()),
+            jstr(&r.stem),
+            items.join(",\n")
+        );
+        return Ok(if strict && r.risky() > 0 { exit::PARTIAL } else { exit::OK });
+    }
+
+    if let Some(exe) = &r.exe {
+        println!("executable  {}", exe.display());
+    }
+    println!("anchor      {}", r.anchor.display());
+    println!("stem        {}", r.stem);
+    for n in &r.notes {
+        println!("note        {n}");
+    }
+
+    if r.found.is_empty() {
+        println!("\nNo companion files found.");
+    } else {
+        println!("\n{} companion file(s), in search order:\n", r.found.len());
+        for f in &r.found {
+            println!(
+                "  [{}] {:<22} {}",
+                f.origin.rank(),
+                f.origin.label(),
+                f.path.display()
+            );
+            println!(
+                "      {:<10} {} bytes",
+                f.format.map(|x| x.name()).unwrap_or("unknown"),
+                f.size
+            );
+            for risk in &f.risks {
+                println!("      RISK   {:?}: {}", risk, risk.explain());
+            }
+        }
+    }
+
+    if verbose && !r.searched.is_empty() {
+        println!("\nProbed and absent ({}):", r.searched.len());
+        for p in &r.searched {
+            println!("  {}", p.display());
+        }
+    }
+
+    let risky = r.risky();
+    if risky > 0 {
+        println!(
+            "\n{risky} of {} hit(s) carry a risk. Read them with `regx inspect`, and \
+             confirm the application really uses that rung before trusting it.",
+            r.found.len()
+        );
+    }
+
+    Ok(if strict && risky > 0 { exit::PARTIAL } else { exit::OK })
 }
 
 fn cmd_inspect(cli: &Cli, files: &[PathBuf], iopts: &cli::InputOpts) -> anyhow::Result<i32> {

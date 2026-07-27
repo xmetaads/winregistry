@@ -78,6 +78,7 @@
       <li><a href="#probe">probe</a></li>
       <li><a href="#hive">hive</a></li>
       <li><a href="#inspect">inspect</a></li>
+      <li><a href="#discover">discover</a></li>
     </ul>
     <h2>Reference</h2>
     <ul>
@@ -452,6 +453,96 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
       </p>
     </section>
 
+    <!-- ================= DISCOVER ================= -->
+    <section id="discover">
+      <h2><code>discover</code></h2>
+      <p>
+        Enterprise executables find their own configuration by anchoring on
+        <code>GetModuleFileNameW(NULL)</code> — the real path of the running module. It is used
+        rather than <code>argv[0]</code> because a parent process chooses <code>argv[0]</code> and
+        can point it anywhere. Strip the extension, append <code>.ini</code>, and that is the classic
+        sidecar; .NET reaches <code>MyApp.exe.config</code> the same way. Around that, products layer
+        a search order.
+      </p>
+      <p>
+        <code>discover</code> reproduces that search, reports which rung each hit came from, and
+        flags the rungs that are load-bearing security bugs.
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-discover">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-discover"><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> discover <span class="tok-str">"C:\Program Files\Acme\updater.exe"</span> <span class="tok-flag">--strict</span>
+
+anchor      C:\Program Files\Acme
+stem        updater
+
+4 companion file(s), in search order:
+
+  [3] beside the executable  C:\Program Files\Acme\updater.ini
+      ini        84 bytes
+  [9] current directory      D:\Shared\updater.ini
+      ini        74 bytes
+      RISK   CurrentDirectory: anyone who can write there controls this configuration</code></pre>
+      </div>
+
+      <h3>The search order</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Rank</th><th scope="col">Origin</th><th scope="col">Notes</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>explicit path</td><td class="muted">Passing a config file rather than an executable anchors on its directory and records the file here.</td></tr>
+            <tr><td>2</td><td>environment variable</td><td class="muted"><code>&lt;STEM&gt;_CONFIG</code>, <code>&lt;STEM&gt;_HOME</code>, <code>&lt;STEM&gt;_INI</code>.</td></tr>
+            <tr><td>3</td><td>beside the executable</td><td class="muted">The sidecar, plus the <code>.exe.&lt;ext&gt;</code> convention.</td></tr>
+            <tr><td>4–6</td><td><code>%LOCALAPPDATA%</code>, <code>%APPDATA%</code>, <code>%PROGRAMDATA%</code></td><td class="muted">Under a <code>\&lt;stem&gt;\</code> subdirectory.</td></tr>
+            <tr><td>7</td><td>registry pointer</td><td class="muted"><code>Software\&lt;stem&gt;</code> <code>ConfigPath</code>. Opt in with <code>--registry-pointer</code>.</td></tr>
+            <tr><td>8</td><td>Group Policy caches</td><td class="muted"><code>Registry.pol</code> and <code>PolicyDefinitions</code>. Opt in with <code>--policy</code>.</td></tr>
+            <tr><td>9</td><td>current directory</td><td class="muted">Always probed so its risk can be reported. Never trusted.</td></tr>
+            <tr><td>10</td><td><code>%WINDIR%</code></td><td class="muted">Where <code>GetPrivateProfileString</code> silently resolves a bare file name.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Risks reported</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Risk</th><th scope="col">Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td><code>CurrentDirectory</code></td><td class="muted">Anyone who can write to a directory a user launches from controls that configuration. This is config planting — the same shape as DLL planting.</td></tr>
+            <tr><td><code>UserWritable</code></td><td class="muted">The file sits somewhere this user can write, while the executable's own directory is protected. A lower-privileged location overriding a higher-privileged one.</td></tr>
+            <tr><td><code>ReparsePoint</code></td><td class="muted">Reached through a symlink or junction; the real target may be elsewhere entirely.</td></tr>
+            <tr><td><code>EscapesAnchor</code></td><td class="muted">A sidecar whose resolved path leaves the anchor directory got there through a link.</td></tr>
+            <tr><td><code>NetworkPath</code></td><td class="muted">UNC or a mapped drive: availability and integrity are not local.</td></tr>
+            <tr><td><code>WindowsFallback</code></td><td class="muted">The <code>%WINDIR%</code> resolution of the profile-string APIs, which plenty of legacy code hits without intending to.</td></tr>
+            <tr><td><code>ShortNameAlias</code></td><td class="muted">Matched only after 8.3 expansion, so path comparisons elsewhere in the system may not agree that these are the same file.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p>
+          Directory writability is <strong>asked of the OS, not inferred from the path</strong>: the
+          directory is opened for <code>FILE_ADD_FILE</code>, which is an access check with no side
+          effect — the same principle as <a href="#probe"><code>probe</code></a>. And
+          <code>discover</code> reports what an application <em>would</em> find; it does not claim to
+          know which rungs a given product actually implements. Confirm before trusting a hit.
+        </p>
+      </div>
+      <p><code>--strict</code> exits <code>5</code> if any hit carries a risk, so a deployment check can gate on it.</p>
+    </section>
+
     <!-- ================= FORMATS ================= -->
     <section id="formats">
       <h2>Input formats</h2>
@@ -468,6 +559,8 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
           <tbody>
             <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">UTF-16 <code>Version 5.00</code> or ANSI <code>REGEDIT4</code>.</td></tr>
             <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">Group Policy PReg binary. See below.</td></tr>
+            <tr><td><code>admx</code></td><td class="muted"><code>.admx</code> + <code>.adml</code></td><td class="muted">Policy template. Concrete values only; elements reported.</td></tr>
+            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences, actions C/R/U/D.</td></tr>
             <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code>/<code>[DelReg]</code> with <code>[Strings]</code> substitution.</td></tr>
             <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">Compact or explicit form.</td></tr>
             <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">Header-driven columns, delimiter auto-detected.</td></tr>
@@ -511,6 +604,61 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
           <code>Machine\</code> and HKCU under <code>User\</code>, so the root has to come from
           outside the file. <code>regx</code> infers it from the path and falls back to
           <code>--pol-root</code>; the choice is always printed.
+        </p>
+      </div>
+
+      <h3>ADMX and ADML</h3>
+      <p>
+        An ADMX is a <strong>schema</strong>, not data: it declares which registry values a policy
+        controls, not what an administrator chose. That distinction drives what is emitted.
+      </p>
+      <p><strong>Emitted</strong>, because it is concrete:</p>
+      <ul>
+        <li><code>&lt;enabledValue&gt;</code> / <code>&lt;disabledValue&gt;</code> on the policy's own <code>valueName</code></li>
+        <li>the documented ADMX default when neither is declared — enabling writes <code>REG_DWORD 1</code>, disabling writes <code>REG_DWORD 0</code></li>
+        <li><code>&lt;enabledList&gt;</code> / <code>&lt;disabledList&gt;</code> items, which carry literal values and may override the key</li>
+      </ul>
+      <p>
+        <strong>Reported, never emitted:</strong> <code>&lt;elements&gt;</code> — <code>text</code>,
+        <code>decimal</code>, <code>boolean</code>, <code>enum</code>, <code>list</code>,
+        <code>multiText</code>. Those hold whatever an administrator typed into the Group Policy
+        editor. Inventing a value for them would put fabricated data into the registry, so
+        <code>regx</code> lists the value names a policy owns and stops there. To see what was
+        actually configured, read the <code>Registry.pol</code> instead.
+      </p>
+      <p>
+        <code>class</code> picks the hive: <code>Machine</code> → HKLM, <code>User</code> → HKCU,
+        <code>Both</code> → emitted into both, which is what Windows does. An accompanying
+        <code>.adml</code> in a language folder is found automatically and resolves the
+        <code>$(string.Id)</code> display names. Choose the rendered state with
+        <code>--admx-state enabled|disabled</code> and narrow to one policy with
+        <code>--admx-policy</code>.
+      </p>
+
+      <h3>Group Policy Preferences</h3>
+      <p>
+        The other half of Group Policy. Where an ADMX declares a schema and a
+        <code>Registry.pol</code> carries the policy branch, GPP writes anywhere in the registry —
+        and its writes are <strong>not</strong> reverted when the GPO stops applying unless the item
+        says so. That is frequently why a setting keeps coming back.
+      </p>
+      <p>
+        Actions <code>C</code>reate, <code>R</code>eplace and <code>U</code>pdate all end in a
+        written value; only <code>D</code> deletes, and a <code>D</code> with an empty
+        <code>name</code> deletes the whole key. <code>&lt;Collection&gt;</code> groups are
+        traversed, <code>REG_MULTI_SZ</code> entries are read from the
+        <code>&lt;Values&gt;</code> children rather than the <code>value</code> attribute, and items
+        marked <code>disabled="1"</code> are skipped and counted.
+      </p>
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        <p>
+          Both XML readers <strong>refuse a <code>DOCTYPE</code></strong> rather than skipping it.
+          A DOCTYPE is where external-entity and billion-laughs attacks live, and neither format
+          needs one — an XML parser that resolves external entities in a tool reading files from a
+          policy share is an XXE vulnerability waiting to happen. Nesting depth is bounded too.
         </p>
       </div>
 

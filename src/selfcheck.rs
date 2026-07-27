@@ -128,7 +128,7 @@ fn wow64() -> Vec<Finding> {
 }
 
 fn image_location() -> Finding {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("<unknown>"));
+    let exe = crate::discover::own_executable().unwrap_or_else(|| PathBuf::from("<unknown>"));
     let lower = exe.to_string_lossy().to_lowercase();
     let risky = ["\\temp\\", "\\downloads\\", "\\appdata\\", "\\users\\public\\"];
     let hit = risky.iter().find(|p| lower.contains(**p));
@@ -153,7 +153,7 @@ fn image_location() -> Finding {
 /// Mark-of-the-Web lives in the `Zone.Identifier` alternate data stream; NTFS
 /// exposes it as a normal file path, so no special API is needed.
 fn mark_of_the_web() -> Finding {
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = crate::discover::own_executable() else {
         return Finding {
             area: "mark-of-the-web",
             verdict: Verdict::Note,

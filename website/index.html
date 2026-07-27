@@ -218,8 +218,18 @@
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line>
             </svg>
           </span>
-          <h3>Reads six formats</h3>
-          <p>Not just <code>.reg</code>: Group Policy <code>Registry.pol</code>, <code>.inf</code> <code>[AddReg]</code> sections, JSON, CSV and INI — all detected from content, all sharing one pipeline.</p>
+          <h3>Reads eight formats</h3>
+          <p>Not just <code>.reg</code>: Group Policy <code>Registry.pol</code>, <code>.admx</code> templates, GPP <code>Registry.xml</code>, <code>.inf</code> <code>[AddReg]</code>, JSON, CSV and INI — all detected from content, all sharing one pipeline.</p>
+        </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </span>
+          <h3>Finds config the way apps do</h3>
+          <p><code>discover</code> reproduces the sidecar search an executable performs — and flags the rungs that are security bugs, like a config picked up from the working directory.</p>
         </article>
       </div>
     </div>
@@ -354,6 +364,8 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
           <tbody>
             <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">regedit's own text format, UTF-16 or ANSI <code>REGEDIT4</code>.</td></tr>
             <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">The Group Policy PReg binary, including the <code>**del.</code>, <code>**DeleteValues</code> and <code>**DeleteKeys</code> directives.</td></tr>
+            <tr><td><code>admx</code></td><td class="muted"><code>.admx</code> + <code>.adml</code></td><td class="muted">Policy templates. Emits the concrete enabled/disabled values; <code>&lt;elements&gt;</code> are reported rather than invented, because only an administrator knows what was typed into them.</td></tr>
+            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences: actions C/R/U/D, <code>&lt;Collection&gt;</code> traversed, disabled items skipped.</td></tr>
             <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code> and <code>[DelReg]</code> sections, with <code>[Strings]</code> token substitution.</td></tr>
             <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">A compact <code>{path: {name: value}}</code> map, or the explicit <code>{"keys": […]}</code> form.</td></tr>
             <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">A header row naming <code>key</code>, <code>name</code>, <code>type</code> and <code>data</code>, in any order.</td></tr>

@@ -35,6 +35,7 @@ used only when designing site pages. Reinstall it with
 | `export <KEY>` | Export a key to `.reg` |
 | `convert <FILE>` | Read any supported format and write `.reg`. Never touches the registry |
 | `inspect <FILE...>` | Report a file's format and contents without applying it |
+| `discover [EXE_OR_DIR]` | Find an application's companion config files the way the application would, and flag the risky rungs |
 | `formats` | List the input formats and how each is detected |
 | `merge <FILE...>` | Combine `.reg` files, last write wins |
 | `query <KEY>` | Read values |
@@ -74,6 +75,8 @@ on all of them unchanged.
 |---|---|---|
 | `reg` | `.reg` | regedit's own text format, UTF-16 or ANSI `REGEDIT4` |
 | `pol` | `Registry.pol` | **Group Policy PReg binary.** Honours `**del.`, `**delvals.`, `**DeleteValues`, `**DeleteKeys`, `**soft.` |
+| `admx` | `.admx` + `.adml` | **Policy template.** Emits the concrete `enabledValue`/`disabledValue`; `<elements>` are reported, never invented |
+| `gpp` | `Registry.xml` | **Group Policy Preferences.** Actions `C`/`R`/`U`/`D`, `<Collection>` traversed, disabled items skipped |
 | `inf` | `.inf` | `[AddReg]` / `[DelReg]` sections with `[Strings]` token substitution |
 | `json` | `.json` | compact `{path: {name: value}}` or explicit `{"keys": [...]}` |
 | `csv` | `.csv`, `.tsv` | header naming `key, name, type, data` in any order |
@@ -92,6 +95,44 @@ regx inspect "C:\Windows\System32\GroupPolicy\Machine\Registry.pol"
 A `Registry.pol` stores no hive of its own: the same bytes mean HKLM under
 `Machine\` and HKCU under `User\`. `regx` infers it from the path and falls back
 to `--pol-root`.
+
+---
+
+## Companion-file discovery
+
+Enterprise executables find their own configuration by anchoring on
+`GetModuleFileNameW(NULL)` — the real path of the running module, used rather
+than `argv[0]` because a parent process controls `argv[0]` and can point it
+anywhere. Strip the extension, append `.ini`, and that is the classic sidecar;
+.NET reaches `MyApp.exe.config` the same way. Around that, products layer a
+search order.
+
+`regx discover` reproduces that search, reports which rung each hit came from,
+and flags the rungs that are load-bearing security bugs.
+
+```bash
+regx discover "C:\Program Files\Acme\updater.exe" --strict
+```
+
+| Rank | Origin | |
+|---|---|---|
+| 1 | explicit path | |
+| 2 | environment variable | `<STEM>_CONFIG`, `<STEM>_HOME`, `<STEM>_INI` |
+| 3 | beside the executable | the sidecar, plus the `.exe.<ext>` convention |
+| 4–6 | `%LOCALAPPDATA%`, `%APPDATA%`, `%PROGRAMDATA%` | under `\<stem>\` |
+| 7 | registry pointer | `Software\<stem>` `ConfigPath` (`--registry-pointer`) |
+| 8 | Group Policy caches | `Registry.pol`, `PolicyDefinitions` (`--policy`) |
+| 9 | **current directory** | reported as a risk, never trusted |
+| 10 | **`%WINDIR%`** | where `GetPrivateProfileString` silently resolves a bare file name |
+
+Risks reported per hit: sourced from the working directory; sitting in a
+directory this user can write to while the executable's own directory is
+protected; reached through a reparse point; resolving outside the anchor;
+on a network path; or matching only after 8.3 short-name expansion.
+
+Directory writability is **asked of the OS**, not inferred from the path: the
+directory is opened for `FILE_ADD_FILE`, which is an access check with no side
+effect — the same principle as `regx probe`.
 
 ---
 
