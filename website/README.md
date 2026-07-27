@@ -27,8 +27,7 @@ Then open <http://localhost:8899/>.
 
 ## Before going live
 
-- [ ] **Replace the placeholder repository URL.** Every `https://github.com/winregistry/regx`
-      link is a stand-in. Search and replace across `index.html`, `docs.html` and this file.
+- [x] Repository links point at <https://github.com/xmetaads/winregistry>.
 - [ ] Point the download button at a real release asset once one exists — it
       currently links to the install section of the docs.
 - [ ] Add an `og:image` (1200×630). The Open Graph tags are in place but there
