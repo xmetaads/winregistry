@@ -31,9 +31,11 @@ used only when designing site pages. Reinstall it with
 
 | Command | What it does |
 |---|---|
-| `import <FILE...>` | Merge `.reg` files into the live registry (writes an undo snapshot first) |
+| `import <FILE...>` | Merge input files into the live registry (writes an undo snapshot first) |
 | `export <KEY>` | Export a key to `.reg` |
-| `convert <FILE>` | Transform a `.reg` file offline. Never touches the registry |
+| `convert <FILE>` | Read any supported format and write `.reg`. Never touches the registry |
+| `inspect <FILE...>` | Report a file's format and contents without applying it |
+| `formats` | List the input formats and how each is detected |
 | `merge <FILE...>` | Combine `.reg` files, last write wins |
 | `query <KEY>` | Read values |
 | `set <KEY>` | Write one value |
@@ -59,6 +61,37 @@ Global flags: `--dry-run`, `-y/--yes`, `--output text|json`, `--view 64|32|both`
 | 6 | redirection refused |
 | 7 | file I/O error |
 | 8 | key or value not found |
+
+---
+
+## Input formats
+
+`.reg` is only one shape registry data arrives in. Every reader funnels into the
+same internal model, so redirection, coalescing, undo snapshots and apply work
+on all of them unchanged.
+
+| Format | Typical file | Notes |
+|---|---|---|
+| `reg` | `.reg` | regedit's own text format, UTF-16 or ANSI `REGEDIT4` |
+| `pol` | `Registry.pol` | **Group Policy PReg binary.** Honours `**del.`, `**delvals.`, `**DeleteValues`, `**DeleteKeys`, `**soft.` |
+| `inf` | `.inf` | `[AddReg]` / `[DelReg]` sections with `[Strings]` token substitution |
+| `json` | `.json` | compact `{path: {name: value}}` or explicit `{"keys": [...]}` |
+| `csv` | `.csv`, `.tsv` | header naming `key, name, type, data` in any order |
+| `ini` | `.ini`, `.cfg` | `[HKEY_...]` sections, optional `:type` suffix per name |
+| `hive` | `NTUSER.DAT` | detected and redirected to `regx hive` |
+
+The format is detected from **content first, extension second** — a
+`Registry.pol` renamed to `.txt` is still a PReg file, and a `.reg` that is
+really JSON is a mistake worth catching before it reaches the registry. Override
+with `--from`.
+
+```bash
+regx inspect "C:\Windows\System32\GroupPolicy\Machine\Registry.pol"
+```
+
+A `Registry.pol` stores no hive of its own: the same bytes mean HKLM under
+`Machine\` and HKCU under `User\`. `regx` infers it from the path and falls back
+to `--pol-root`.
 
 ---
 

@@ -3,6 +3,7 @@ mod coalesce;
 mod encoding;
 mod engine;
 mod fix;
+mod formats;
 mod hive;
 mod model;
 mod parser;
@@ -61,23 +62,36 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             backup,
         } => cmd_validate(cli, files, *strict, *fix, out.as_deref(), *backup),
         Command::Convert {
-            input,
+            file,
             out,
+            input,
             redirect,
             reg4,
-        } => cmd_convert(cli, input, out.as_deref(), redirect, *reg4),
+        } => cmd_convert(cli, file, out.as_deref(), input, redirect, *reg4),
         Command::Merge { files, out } => cmd_merge(cli, files, out.as_deref()),
         Command::Import {
             files,
+            input,
             redirect,
             backup,
             no_backup,
-        } => cmd_import(cli, files, redirect, backup.as_deref(), *no_backup, false),
+        } => cmd_import(cli, files, input, redirect, backup.as_deref(), *no_backup, false),
         Command::Sync {
+            file,
             input,
             redirect,
             prune,
-        } => cmd_sync(cli, input, redirect, *prune),
+        } => cmd_import(
+            cli,
+            std::slice::from_ref(file),
+            input,
+            redirect,
+            None,
+            false,
+            *prune,
+        ),
+        Command::Formats => cmd_formats(cli),
+        Command::Inspect { files, input } => cmd_inspect(cli, files, input),
         Command::Export {
             key,
             out,
@@ -130,6 +144,45 @@ fn view_of(g: &GlobalOpts) -> View {
 fn read_reg(path: &Path) -> anyhow::Result<ParseOutcome> {
     let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
     Ok(parser::parse_bytes(&bytes))
+}
+
+fn read_options(o: &cli::InputOpts) -> anyhow::Result<formats::ReadOptions> {
+    let mut opts = formats::ReadOptions::default();
+    if let Some(h) = &o.pol_root {
+        opts.pol_root = Hive::parse(h)
+            .ok_or_else(|| anyhow!("--pol-root {h:?} is not a hive name (try HKLM or HKCU)"))?;
+    }
+    opts.inf_section = o.inf_section.clone();
+    Ok(opts)
+}
+
+/// Read any supported format, reporting what was detected and anything the
+/// reader had to decide on its own.
+fn read_any(cli: &Cli, path: &Path, o: &cli::InputOpts) -> anyhow::Result<formats::ReadOutcome> {
+    let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+
+    let forced = match &o.from {
+        Some(name) => Some(formats::Format::parse_name(name).ok_or_else(|| {
+            anyhow!("--from {name:?} is not a known format; run `regx formats`")
+        })?),
+        None => None,
+    };
+
+    let outcome = formats::read(&bytes, Some(path), forced, &read_options(o)?)
+        .map_err(|e| anyhow!("{}: {e}", path.display()))?;
+
+    if cli.global.log_level >= LogLevel::Info {
+        eprintln!(
+            "regx: {} read as {}{}",
+            path.display(),
+            outcome.format,
+            if forced.is_some() { " (forced)" } else { " (detected)" }
+        );
+        for n in &outcome.notes {
+            eprintln!("  note: {n}");
+        }
+    }
+    Ok(outcome)
 }
 
 fn report_diagnostics(path: &Path, outcome: &ParseOutcome, level: LogLevel) {
@@ -388,16 +441,11 @@ fn cmd_convert(
     cli: &Cli,
     input: &Path,
     out: Option<&Path>,
+    iopts: &cli::InputOpts,
     ropts: &RedirectOpts,
     reg4: bool,
 ) -> anyhow::Result<i32> {
-    let outcome = read_reg(input)?;
-    report_diagnostics(input, &outcome, cli.global.log_level);
-    if outcome.has_errors() {
-        return Ok(exit::PARSE);
-    }
-
-    let mut file = outcome.file;
+    let mut file = read_any(cli, input, iopts)?.file;
     file.format = if reg4 { RegFormat::V4 } else { RegFormat::V5 };
     let r = apply_redirect(&mut file, ropts, cli.global.log_level);
 
@@ -470,6 +518,7 @@ fn cmd_merge(cli: &Cli, files: &[PathBuf], out: Option<&Path>) -> anyhow::Result
 fn cmd_import(
     cli: &Cli,
     files: &[PathBuf],
+    iopts: &cli::InputOpts,
     ropts: &RedirectOpts,
     backup: Option<&Path>,
     no_backup: bool,
@@ -477,12 +526,7 @@ fn cmd_import(
 ) -> anyhow::Result<i32> {
     let mut all = Vec::new();
     for p in files {
-        let outcome = read_reg(p)?;
-        report_diagnostics(p, &outcome, cli.global.log_level);
-        if outcome.has_errors() {
-            return Ok(exit::PARSE);
-        }
-        all.extend(outcome.file.keys);
+        all.extend(read_any(cli, p, iopts)?.file.keys);
     }
     let mut file = RegFile {
         format: RegFormat::V5,
@@ -553,10 +597,6 @@ fn cmd_import(
     } else {
         exit::OK
     })
-}
-
-fn cmd_sync(cli: &Cli, input: &Path, ropts: &RedirectOpts, prune: bool) -> anyhow::Result<i32> {
-    cmd_import(cli, std::slice::from_ref(&input.to_path_buf()), ropts, None, false, prune)
 }
 
 /// For `--prune`: any live value under a declared key that the file does not
@@ -1191,6 +1231,111 @@ fn split_argv(s: &str) -> Vec<String> {
         out.push(cur);
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// formats / inspect
+// ---------------------------------------------------------------------------
+
+const FORMAT_TABLE: &[(&str, &str, &str)] = &[
+    ("reg",  ".reg",          "regedit's own text format, UTF-16 or ANSI REGEDIT4"),
+    ("pol",  "Registry.pol",  "Group Policy PReg binary; **del./**DeleteValues directives honoured"),
+    ("inf",  ".inf",          "[AddReg]/[DelReg] sections, with [Strings] token substitution"),
+    ("json", ".json",         "compact {path: {name: value}} or explicit {\"keys\": [...]}"),
+    ("csv",  ".csv / .tsv",   "header row naming key, name, type, data in any order"),
+    ("ini",  ".ini / .cfg",   "[HKEY_...] sections, optional :type suffix on each name"),
+    ("hive", "NTUSER.DAT",    "not read here - use `regx hive <FILE>`"),
+];
+
+fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
+    if cli.global.output == OutputFormat::Json {
+        let items: Vec<String> = FORMAT_TABLE
+            .iter()
+            .map(|(n, ext, d)| {
+                format!(
+                    "  {{\"format\": {}, \"typical\": {}, \"notes\": {}}}",
+                    jstr(n), jstr(ext), jstr(d)
+                )
+            })
+            .collect();
+        println!("[\n{}\n]", items.join(",\n"));
+        return Ok(exit::OK);
+    }
+
+    println!("Input formats (detected from content first, extension second):\n");
+    for (name, ext, desc) in FORMAT_TABLE {
+        println!("  {name:<6} {ext:<14} {desc}");
+    }
+    println!(
+        "\nForce one with --from <FORMAT> on import, convert, sync or inspect.\n\
+         A Registry.pol carries no hive of its own: it is inferred from a Machine\\ or\n\
+         User\\ path component, or set with --pol-root."
+    );
+    Ok(exit::OK)
+}
+
+fn cmd_inspect(cli: &Cli, files: &[PathBuf], iopts: &cli::InputOpts) -> anyhow::Result<i32> {
+    let mut worst = exit::OK;
+
+    for path in files {
+        let outcome = match read_any(cli, path, iopts) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("regx: {e:#}");
+                worst = exit::PARSE;
+                continue;
+            }
+        };
+
+        let values: usize = outcome.file.keys.iter().map(|k| k.values.len()).sum();
+        let deletes = outcome.file.keys.iter().filter(|k| k.delete).count();
+        let mut hives: Vec<&str> = outcome
+            .file
+            .keys
+            .iter()
+            .map(|k| k.path.hive.long_name())
+            .collect();
+        hives.sort_unstable();
+        hives.dedup();
+
+        if cli.global.output == OutputFormat::Json {
+            println!(
+                "{{\"file\": {}, \"format\": {}, \"keys\": {}, \"values\": {}, \
+                 \"keyDeletes\": {}, \"hives\": [{}], \"notes\": [{}]}}",
+                jstr(&path.display().to_string()),
+                jstr(outcome.format.name()),
+                outcome.file.keys.len(),
+                values,
+                deletes,
+                hives.iter().map(|h| jstr(h)).collect::<Vec<_>>().join(", "),
+                outcome.notes.iter().map(|n| jstr(n)).collect::<Vec<_>>().join(", "),
+            );
+            continue;
+        }
+
+        println!("{}", path.display());
+        println!("  format      {}", outcome.format);
+        println!("  key blocks  {} ({deletes} whole-key delete(s))", outcome.file.keys.len());
+        println!("  values      {values}");
+        println!("  hives       {}", hives.join(", "));
+        for n in &outcome.notes {
+            println!("  note        {n}");
+        }
+
+        // Show where each key would land if it were redirected, without writing.
+        let refused = outcome
+            .file
+            .keys
+            .iter()
+            .filter(|k| redirect::map(&k.path, Policy::Auto).confidence == Confidence::Refuse)
+            .count();
+        if refused > 0 {
+            println!("  {refused} key(s) have no per-user equivalent; `regx convert` shows which");
+            worst = exit::PARTIAL;
+        }
+    }
+
+    Ok(worst)
 }
 
 // ---------------------------------------------------------------------------

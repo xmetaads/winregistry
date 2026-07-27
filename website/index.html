@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>regx — Windows Registry CLI that never asks for admin | winregistry.org</title>
 <meta name="description" content="A portable, single-file Windows Registry CLI for standard users. Manifested asInvoker, so it never raises a UAC prompt. Smart HKLM to HKCU redirection, offline hive editing without administrator rights, and automatic undo snapshots.">
-<link rel="canonical" href="https://winregistry.org/">
+<link rel="canonical" href="https://www.winregistry.org/">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://winregistry.org/">
+<meta property="og:url" content="https://www.winregistry.org/">
 <meta property="og:title" content="regx — Windows Registry CLI that never asks for admin">
 <meta property="og:description" content="Portable, single-file, standard-user Registry CLI. No UAC prompt, no installer, no runtime.">
 <meta name="twitter:card" content="summary_large_image">
@@ -52,6 +52,7 @@
       <a href="#features">Features</a>
       <a href="#redirection">Redirection</a>
       <a href="#offline">Offline hives</a>
+      <a href="#formats">Formats</a>
       <a href="/docs">Docs</a>
       <a href="https://github.com/xmetaads/winregistry">Source</a>
     </nav>
@@ -210,6 +211,16 @@
           <h3>Pipeline-ready</h3>
           <p>Distinct exit codes for parse errors, access denied, partial application and refused redirects. <code>--output json</code> everywhere, <code>--dry-run</code> on every write.</p>
         </article>
+
+        <article class="card reveal">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line>
+            </svg>
+          </span>
+          <h3>Reads six formats</h3>
+          <p>Not just <code>.reg</code>: Group Policy <code>Registry.pol</code>, <code>.inf</code> <code>[AddReg]</code> sections, JSON, CSV and INI — all detected from content, all sharing one pipeline.</p>
+        </article>
       </div>
     </div>
   </section>
@@ -315,6 +326,74 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
           and a <code>set</code> in the next would find nothing mounted. Every operation therefore runs inside a
           single mount, and <code>exec</code> chains as many as you need.
           <a href="/docs#hive">Full explanation in the docs &rarr;</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ FORMATS ============================ -->
+  <section id="formats">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">Input formats</span>
+        <h2>Registry data does not only arrive as <code>.reg</code></h2>
+        <p>
+          A locked-down machine hands you a <code>Registry.pol</code> from the Group Policy cache.
+          An application ships an <code>.inf</code>. A colleague sends a spreadsheet. Every reader
+          funnels into the same internal model, so redirection, coalescing, undo snapshots and apply
+          work on all of them unchanged.
+        </p>
+      </div>
+
+      <div class="table-scroll reveal">
+        <table>
+          <caption class="visually-hidden">Input formats regx can read</caption>
+          <thead>
+            <tr><th scope="col">Format</th><th scope="col">Typical file</th><th scope="col">What it reads</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">regedit's own text format, UTF-16 or ANSI <code>REGEDIT4</code>.</td></tr>
+            <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">The Group Policy PReg binary, including the <code>**del.</code>, <code>**DeleteValues</code> and <code>**DeleteKeys</code> directives.</td></tr>
+            <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code> and <code>[DelReg]</code> sections, with <code>[Strings]</code> token substitution.</td></tr>
+            <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">A compact <code>{path: {name: value}}</code> map, or the explicit <code>{"keys": […]}</code> form.</td></tr>
+            <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">A header row naming <code>key</code>, <code>name</code>, <code>type</code> and <code>data</code>, in any order.</td></tr>
+            <tr><td><code>ini</code></td><td class="muted"><code>.ini</code>, <code>.cfg</code></td><td class="muted"><code>[HKEY_…]</code> sections with an optional <code>:type</code> suffix on each name.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="terminal reveal mt-lg">
+        <div class="terminal-bar">
+          <span class="title">powershell</span>
+          <span class="copy">
+            <button class="copy-btn" type="button" data-copy-target="snippet-formats">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label" aria-live="polite">Copy</span>
+            </button>
+          </span>
+        </div>
+<pre><code id="snippet-formats"><span class="tok-dim"># What does this Group Policy file actually write?</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> convert <span class="tok-str">"C:\Windows\System32\GroupPolicy\Machine\Registry.pol"</span> <span class="tok-flag">--redirect</span> off
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Acme\Client]
+<span class="tok-str">"ServerUrl"</span>=<span class="tok-str">"https://acme.test"</span>
+<span class="tok-str">"MaxRetries"</span>=dword:00000003
+<span class="tok-str">"LegacyMode"</span>=-          <span class="tok-dim">; from the **del. directive</span></code></pre>
+      </div>
+
+      <div class="callout reveal mt-lg">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p>
+          Format is detected from <strong>content first, extension second</strong>. A
+          <code>Registry.pol</code> renamed to <code>.txt</code> is still a PReg file, and a
+          <code>.reg</code> that is really JSON is a mistake worth catching before it reaches the
+          registry. <a href="/docs#formats">Full format reference &rarr;</a>
         </p>
       </div>
     </div>

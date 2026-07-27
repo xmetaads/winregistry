@@ -109,6 +109,27 @@ pub enum OnRefuse {
     Fail,
 }
 
+/// Shared by every command that reads registry data from a file.
+///
+/// The format is detected from content first and the extension second, so these
+/// flags are only needed when detection is wrong or when the file itself cannot
+/// carry the information — a `Registry.pol` records no hive, for instance.
+#[derive(Args, Debug, Clone, Default)]
+pub struct InputOpts {
+    /// Force the input format: reg, pol, inf, json, csv, ini.
+    #[arg(long, value_name = "FORMAT")]
+    pub from: Option<String>,
+
+    /// Root hive for Registry.pol paths, which store no hive of their own.
+    /// Inferred from a Machine\ or User\ path component when possible.
+    #[arg(long, value_name = "HIVE")]
+    pub pol_root: Option<String>,
+
+    /// Read only this [AddReg]/[DelReg] section of an INF.
+    #[arg(long, value_name = "SECTION")]
+    pub inf_section: Option<String>,
+}
+
 /// Shared by every command that can rewrite HKLM paths.
 #[derive(Args, Debug, Clone)]
 pub struct RedirectOpts {
@@ -126,10 +147,16 @@ pub struct RedirectOpts {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Merge one or more .reg files into the live registry.
+    /// Merge one or more input files into the live registry.
+    ///
+    /// Accepts .reg, Registry.pol, .inf, .json, .csv and .ini; the format is
+    /// detected per file. See `regx formats`.
     Import {
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
+
+        #[command(flatten)]
+        input: InputOpts,
 
         #[command(flatten)]
         redirect: RedirectOpts,
@@ -160,13 +187,17 @@ pub enum Command {
         reg4: bool,
     },
 
-    /// Transform a .reg file offline. Never touches the registry.
+    /// Read any supported format and write it out as .reg. Never touches the
+    /// registry, so it is the safe way to inspect a Registry.pol or an INF.
     Convert {
         #[arg(value_name = "FILE")]
-        input: PathBuf,
+        file: PathBuf,
 
         #[arg(long, short = 'o', value_name = "FILE")]
         out: Option<PathBuf>,
+
+        #[command(flatten)]
+        input: InputOpts,
 
         #[command(flatten)]
         redirect: RedirectOpts,
@@ -241,10 +272,13 @@ pub enum Command {
         recursive: bool,
     },
 
-    /// Apply a .reg file idempotently, optionally removing anything not declared.
+    /// Apply an input file idempotently, optionally removing anything not declared.
     Sync {
         #[arg(value_name = "FILE")]
-        input: PathBuf,
+        file: PathBuf,
+
+        #[command(flatten)]
+        input: InputOpts,
 
         #[command(flatten)]
         redirect: RedirectOpts,
@@ -280,6 +314,18 @@ pub enum Command {
     Probe {
         #[arg(value_name = "KEY")]
         key: String,
+    },
+
+    /// List the input formats regx can read, and how each is detected.
+    Formats,
+
+    /// Report the format of a file and what it contains, without applying it.
+    Inspect {
+        #[arg(required = true, value_name = "FILE")]
+        files: Vec<PathBuf>,
+
+        #[command(flatten)]
+        input: InputOpts,
     },
 
     /// Work on an offline hive file via RegLoadAppKey - no administrator rights.

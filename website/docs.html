@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Documentation — regx | winregistry.org</title>
 <meta name="description" content="Complete command reference for regx: install, import, export, convert, sync, validate --fix, probe, offline hive operations via RegLoadAppKey, exit codes, and getting past AppLocker and WDAC.">
-<link rel="canonical" href="https://winregistry.org/docs.html">
+<link rel="canonical" href="https://www.winregistry.org/docs">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://winregistry.org/docs.html">
+<meta property="og:url" content="https://www.winregistry.org/docs">
 <meta property="og:title" content="regx documentation">
 <meta property="og:description" content="Complete command reference for the standard-user Windows Registry CLI.">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
@@ -77,9 +77,11 @@
       <li><a href="#query">query, set, delete</a></li>
       <li><a href="#probe">probe</a></li>
       <li><a href="#hive">hive</a></li>
+      <li><a href="#inspect">inspect</a></li>
     </ul>
     <h2>Reference</h2>
     <ul>
+      <li><a href="#formats">Input formats</a></li>
       <li><a href="#redirect-ref">Redirection flags</a></li>
       <li><a href="#types">Value types</a></li>
       <li><a href="#applocker">AppLocker &amp; WDAC</a></li>
@@ -424,6 +426,173 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
         <code>NTUSER.DAT</code> fails with <code>ERROR_SHARING_VIOLATION</code> by design —
         <code>hive info</code> reports this before you commit to a write.
       </p>
+    </section>
+
+    <!-- ================= INSPECT ================= -->
+    <section id="inspect">
+      <h2><code>inspect</code></h2>
+      <p>
+        Report what a file is and what it contains, without applying any of it. Use it on anything
+        you did not write yourself before deciding whether to import.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> inspect <span class="tok-str">"C:\Windows\System32\GroupPolicy\Machine\Registry.pol"</span>
+
+  format      pol
+  key blocks  2 (0 whole-key delete(s))
+  values      6
+  hives       HKEY_LOCAL_MACHINE
+  note        5 policy record(s)
+  note        policy paths rooted at HKEY_LOCAL_MACHINE (a .pol stores no hive)
+  1 key(s) have no per-user equivalent; `regx convert` shows which</code></pre>
+      </div>
+      <p>
+        <code>regx formats</code> lists every supported format and how each is detected.
+      </p>
+    </section>
+
+    <!-- ================= FORMATS ================= -->
+    <section id="formats">
+      <h2>Input formats</h2>
+      <p>
+        <code>import</code>, <code>convert</code>, <code>sync</code> and <code>inspect</code> all
+        accept any format below. Each reader produces the same internal model, so redirection,
+        coalescing, undo snapshots and apply behave identically whatever the input was.
+        <code>regx formats</code> prints this table.
+      </p>
+
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Format</th><th scope="col">Typical file</th><th scope="col">Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">UTF-16 <code>Version 5.00</code> or ANSI <code>REGEDIT4</code>.</td></tr>
+            <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">Group Policy PReg binary. See below.</td></tr>
+            <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code>/<code>[DelReg]</code> with <code>[Strings]</code> substitution.</td></tr>
+            <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">Compact or explicit form.</td></tr>
+            <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">Header-driven columns, delimiter auto-detected.</td></tr>
+            <tr><td><code>ini</code></td><td class="muted"><code>.ini</code>, <code>.cfg</code></td><td class="muted">Section per key path.</td></tr>
+            <tr><td><code>hive</code></td><td class="muted"><code>NTUSER.DAT</code></td><td class="muted">Detected, then redirected to <a href="#hive"><code>regx hive</code></a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Detection reads <strong>content first and the extension second</strong>. Override it with
+        <code>--from &lt;FORMAT&gt;</code> when a file is mislabelled.
+      </p>
+
+      <h3>Registry.pol</h3>
+      <p>
+        The binary a domain controller pushes down and the Group Policy engine replays. The cached
+        copies under <code>%WINDIR%\System32\GroupPolicy</code> and
+        <code>…\GroupPolicyUsers</code> are readable by ordinary users, so you can see exactly which
+        registry writes a policy performs — no elevation, no guessing.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Directive</th><th scope="col">Handled as</th></tr></thead>
+          <tbody>
+            <tr><td><code>**del.Name</code></td><td class="muted">delete the value <code>Name</code></td></tr>
+            <tr><td><code>**delvals.</code></td><td class="muted">delete every value in the key — expressed as a key delete, which also removes subkeys, and reported as such</td></tr>
+            <tr><td><code>**DeleteValues</code></td><td class="muted">expands the <code>;</code>-separated list into individual value deletes</td></tr>
+            <tr><td><code>**DeleteKeys</code></td><td class="muted">expands into <code>[-KEY]</code> blocks for each named subkey</td></tr>
+            <tr><td><code>**soft.Name</code></td><td class="muted">"write only if absent" — applied unconditionally, and reported, because <code>.reg</code> has no equivalent</td></tr>
+            <tr><td><code>**SecureKey</code>, <code>**ListElement</code></td><td class="muted">no registry effect; ignored and reported</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p>
+          <strong>A <code>.pol</code> records no hive.</strong> The same bytes mean HKLM under
+          <code>Machine\</code> and HKCU under <code>User\</code>, so the root has to come from
+          outside the file. <code>regx</code> infers it from the path and falls back to
+          <code>--pol-root</code>; the choice is always printed.
+        </p>
+      </div>
+
+      <h3>INF</h3>
+      <p>
+        Reads every <code>[AddReg]</code> and <code>[DelReg]</code> section named by an
+        <code>AddReg=</code>/<code>DelReg=</code> directive; restrict it with
+        <code>--inf-section</code>. <code>%Token%</code> references resolve against
+        <code>[Strings]</code>, and <code>%%</code> stays a literal percent. Unknown tokens are left
+        verbatim rather than becoming an empty string the author never intended.
+        <code>HKR</code> is skipped and reported — it is relative to a driver install context that
+        only exists inside SetupAPI, so there is no honest path to map it to.
+      </p>
+
+      <h3>JSON</h3>
+      <p>The compact form is what you write by hand. Types map on sight.</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">acme.json</span></div>
+<pre><code>{
+  <span class="tok-str">"HKCU\\Software\\Acme"</span>: {
+    <span class="tok-str">"Server"</span>:  <span class="tok-str">"acme.test"</span>,            <span class="tok-dim">// REG_SZ</span>
+    <span class="tok-str">"Port"</span>:    8080,                   <span class="tok-dim">// REG_DWORD</span>
+    <span class="tok-str">"Enabled"</span>: true,                   <span class="tok-dim">// REG_DWORD 1</span>
+    <span class="tok-str">"Recent"</span>:  [<span class="tok-str">"a.txt"</span>, <span class="tok-str">"b.txt"</span>],   <span class="tok-dim">// REG_MULTI_SZ</span>
+    <span class="tok-str">"Blob"</span>:    { <span class="tok-str">"type"</span>: <span class="tok-str">"REG_BINARY"</span>, <span class="tok-str">"data"</span>: <span class="tok-str">"de ad be ef"</span> },
+    <span class="tok-str">"Legacy"</span>:  null                    <span class="tok-dim">// delete the value</span>
+  }
+}</code></pre>
+      </div>
+      <p>
+        An integer too wide for a DWORD widens to <code>REG_QWORD</code> rather than truncating.
+        Floating-point numbers are refused: the registry has no such type, and silently rounding
+        would be worse than an error. Registry paths need <strong>doubled backslashes</strong> —
+        <code>"HKCU\\Software"</code>, not <code>"HKCU\Software"</code> — because a lone backslash
+        is not a valid JSON escape.
+      </p>
+      <p>The explicit form adds key deletion and named types:</p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">explicit form</span></div>
+<pre><code>{ <span class="tok-str">"keys"</span>: [
+  { <span class="tok-str">"path"</span>: <span class="tok-str">"HKCU\\Software\\Gone"</span>, <span class="tok-str">"delete"</span>: true },
+  { <span class="tok-str">"path"</span>: <span class="tok-str">"HKCU\\Software\\Acme"</span>,
+    <span class="tok-str">"values"</span>: [ { <span class="tok-str">"name"</span>: <span class="tok-str">"Port"</span>, <span class="tok-str">"type"</span>: <span class="tok-str">"REG_DWORD"</span>, <span class="tok-str">"data"</span>: 8080 } ] }
+] }</code></pre>
+      </div>
+
+      <h3>CSV</h3>
+      <p>
+        Columns are matched by header name in any order, case-insensitively, so a sheet exported
+        from Excel works unedited. Quoting follows RFC 4180. An empty type <em>and</em> data deletes
+        the value; <code>DELETE_KEY</code> in the data column with no value name deletes the key.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">acme.csv</span></div>
+<pre><code>key,name,type,data
+HKCU\Software\Acme,Server,REG_SZ,acme.test
+HKCU\Software\Acme,Port,REG_DWORD,8080
+HKCU\Software\Acme,Legacy,,                 <span class="tok-dim"># delete the value</span>
+HKCU\Software\Old,,,DELETE_KEY              <span class="tok-dim"># delete the key</span></code></pre>
+      </div>
+
+      <h3>INI</h3>
+      <p>
+        A section header is a full registry path and <code>[-Path]</code> deletes the key, both
+        borrowed from <code>.reg</code>. The optional <code>:type</code> suffix is the only addition;
+        without it a value is <code>REG_SZ</code>, which is what an ordinary INI means anyway.
+        <code>REG_MULTI_SZ</code> entries are separated with <code>|</code>, which reads better here
+        than <code>reg.exe</code>'s <code>\0</code>.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">acme.ini</span></div>
+<pre><code>[HKEY_CURRENT_USER\Software\Acme]
+Server = acme.test
+Port:dword = 8080
+Path:expand_sz = %USERPROFILE%\acme
+Recent:multi_sz = a.txt|b.txt
+Blob:binary = 01 02 ff
+Legacy =                       <span class="tok-dim">; empty value deletes it</span>
+@ = default value
+
+[-HKEY_CURRENT_USER\Software\Old]</code></pre>
+      </div>
     </section>
 
     <!-- ================= REDIRECT REF ================= -->
