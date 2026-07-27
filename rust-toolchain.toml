@@ -2,7 +2,10 @@
 # repository out compiles with the same compiler, and CI cannot drift away from
 # what a developer sees locally.
 [toolchain]
-channel = "stable"
+# An exact version, not "stable". A floating channel means CI silently moves to
+# a compiler with a different lint set than developers are running, and the
+# first symptom is a clippy failure nobody can reproduce locally.
+channel = "1.94.1"
 components = ["rustfmt", "clippy"]
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 profile = "minimal"
