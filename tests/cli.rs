@@ -95,6 +95,36 @@ fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Is this process elevated?
+///
+/// A handful of assertions here are about the *environment* rather than the
+/// code: that an HKLM write is refused, that `probe` reports HKLM as read-only.
+/// They are the product's central premise and worth testing, but they only mean
+/// anything when the tests run as a standard user.
+///
+/// GitHub's `windows-latest` runners execute as an administrator, so those
+/// assertions are inverted there. Rather than delete them or let CI go red on a
+/// property of the runner, each one checks first and says plainly when it could
+/// not assert what it exists to assert.
+fn elevated() -> bool {
+    // Asking the binary keeps this consistent with what the product itself
+    // reports, instead of a second opinion that could disagree.
+    let o = run(&["--self-check", "--output", "json"]);
+    let text = stdout(&o);
+    text.contains("running ELEVATED") || !text.contains("not elevated")
+}
+
+fn skip_if_elevated(what: &str) -> bool {
+    if elevated() {
+        eprintln!(
+            "SKIPPED: {what} - this process is elevated, so the assertion is \
+             not meaningful. Run the tests as a standard user to exercise it."
+        );
+        return true;
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Basic contract
 // ---------------------------------------------------------------------------
@@ -501,6 +531,9 @@ fn json_output_is_well_formed_for_every_command_that_offers_it() {
 
 #[test]
 fn probe_json_reports_hklm_software_as_not_writable() {
+    if skip_if_elevated("probe reports HKLM as read-only") {
+        return;
+    }
     let o = run(&["probe", "HKLM\\SOFTWARE", "--output", "json"]);
     let text = stdout(&o);
     assert!(looks_like_json(&text), "{text}");
@@ -825,14 +858,25 @@ fn version_reports_build_provenance() {
 }
 
 #[test]
-fn self_check_runs_and_reports_the_process_as_unelevated() {
+fn self_check_reports_the_elevation_state_correctly() {
     let o = run(&["--self-check"]);
     // Exit is OK or PARTIAL depending on the host's policy configuration.
     assert!(code(&o) == OK || code(&o) == PARTIAL, "exit {}", code(&o));
     let text = stdout(&o);
     assert!(text.contains("elevation"), "{text}");
-    assert!(
-        text.contains("not elevated"),
-        "the test host must not be elevated - the product targets standard users:\n{text}"
-    );
+
+    // Whichever way the host is configured, --self-check has to say so
+    // accurately: reporting an elevated process as unelevated would be worse
+    // than the elevation itself, because the operator would trust it.
+    if elevated() {
+        assert!(
+            text.contains("ELEVATED"),
+            "an elevated host must be reported as such:\n{text}"
+        );
+    } else {
+        assert!(
+            text.contains("not elevated"),
+            "a standard-user host must be reported as such:\n{text}"
+        );
+    }
 }

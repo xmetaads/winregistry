@@ -39,11 +39,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      # The integration suite asserts that HKLM is NOT writable, because that is
-      # the environment the product is built for. GitHub's Windows runners are
-      # unelevated, which is exactly right.
+      # A handful of assertions are about the environment rather than the code:
+      # that an HKLM write is refused, that System32 is not writable. They are
+      # the product's central premise, but `windows-latest` runs as an
+      # administrator, so they are inverted here and the tests say so and skip
+      # rather than failing on a property of the runner. Run the suite locally
+      # as a standard user to exercise them for real.
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --all-targets -- --nocapture
+
+      - name: Note which assertions the runner could not exercise
+        if: always()
+        shell: pwsh
+        run: |
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $admin = (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+          if ($admin) {
+            "::warning::The runner is elevated, so the standard-user assertions " +
+            "(HKLM denied, System32 not writable) were skipped. They are exercised " +
+            "when the suite runs as a normal user."
+          } else {
+            "runner is unelevated: the standard-user assertions were exercised"
+          }
 
       - name: Build release
         run: cargo build --release
