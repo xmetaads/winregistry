@@ -29,7 +29,12 @@ impl Node {
         // enough inconsistency that a case-insensitive fallback saves grief.
         self.attrs
             .get(name)
-            .or_else(|| self.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))
+            .or_else(|| {
+                self.attrs
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| v)
+            })
             .map(String::as_str)
     }
 
@@ -64,12 +69,19 @@ impl Node {
 
 pub fn parse(text: &str) -> Result<Node, String> {
     let b: Vec<char> = text.chars().collect();
-    let mut p = P { b: &b, i: 0, depth: 0 };
+    let mut p = P {
+        b: &b,
+        i: 0,
+        depth: 0,
+    };
     p.prolog()?;
     let root = p.element()?;
     p.ws_and_misc()?;
     if p.i < p.b.len() {
-        return Err(format!("trailing content after the root element at character {}", p.i + 1));
+        return Err(format!(
+            "trailing content after the root element at character {}",
+            p.i + 1
+        ));
     }
     Ok(root)
 }
@@ -183,10 +195,18 @@ impl<'a> P<'a> {
                 Some('/') => {
                     self.skip(1);
                     if self.at() != Some('>') {
-                        return Err(format!("expected '>' after '/' at character {}", self.i + 1));
+                        return Err(format!(
+                            "expected '>' after '/' at character {}",
+                            self.i + 1
+                        ));
                     }
                     self.skip(1);
-                    return Ok(Node { name, attrs, children: Vec::new(), text: String::new() });
+                    return Ok(Node {
+                        name,
+                        attrs,
+                        children: Vec::new(),
+                        text: String::new(),
+                    });
                 }
                 Some('>') => {
                     self.skip(1);
@@ -276,7 +296,12 @@ impl<'a> P<'a> {
     fn attr_value(&mut self) -> Result<String, String> {
         let quote = match self.at() {
             Some(q @ ('"' | '\'')) => q,
-            _ => return Err(format!("expected a quoted attribute value at character {}", self.i + 1)),
+            _ => {
+                return Err(format!(
+                    "expected a quoted attribute value at character {}",
+                    self.i + 1
+                ))
+            }
         };
         self.skip(1);
         let mut out = String::new();
@@ -306,7 +331,10 @@ impl<'a> P<'a> {
             self.i += 1;
         }
         if self.at() != Some(';') {
-            return Err(format!("unterminated entity reference at character {}", start));
+            return Err(format!(
+                "unterminated entity reference at character {}",
+                start
+            ));
         }
         let name: String = self.b[start..self.i].iter().collect();
         self.skip(1);
@@ -348,7 +376,9 @@ mod tests {
 
     #[test]
     fn parses_elements_attributes_and_text() {
-        let n = parse(r#"<?xml version="1.0"?><root a="1" b='two'><child>hi</child><!-- c --></root>"#).unwrap();
+        let n =
+            parse(r#"<?xml version="1.0"?><root a="1" b='two'><child>hi</child><!-- c --></root>"#)
+                .unwrap();
         assert_eq!(n.name, "root");
         assert_eq!(n.attr("a"), Some("1"));
         assert_eq!(n.attr("b"), Some("two"));

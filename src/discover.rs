@@ -201,7 +201,10 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
         (None, dir, stem)
     } else {
         let file = canonical(target);
-        let dir = file.parent().map(Path::to_path_buf).unwrap_or_else(|| file.clone());
+        let dir = file
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| file.clone());
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -225,7 +228,11 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
     r.notes.push(format!(
         "anchor {} is {} by this user",
         anchor.display(),
-        if anchor_writable { "writable" } else { "not writable" }
+        if anchor_writable {
+            "writable"
+        } else {
+            "not writable"
+        }
     ));
 
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
@@ -234,8 +241,13 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
     //    an executable.
     if given_config {
         consider(
-            &mut r, &mut seen, canonical(target),
-            Origin::Explicit, &anchor, anchor_writable, opts,
+            &mut r,
+            &mut seen,
+            canonical(target),
+            Origin::Explicit,
+            &anchor,
+            anchor_writable,
+            opts,
         );
         r.notes.push(
             "the target is itself a configuration file; the search below shows what else the \
@@ -246,7 +258,11 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
 
     // 2. Environment variables an operator or CI would set.
     let up = stem.to_ascii_uppercase().replace(['-', '.', ' '], "_");
-    for var in [format!("{up}_CONFIG"), format!("{up}_HOME"), format!("{up}_INI")] {
+    for var in [
+        format!("{up}_CONFIG"),
+        format!("{up}_HOME"),
+        format!("{up}_INI"),
+    ] {
         if let Ok(v) = std::env::var(&var) {
             let p = PathBuf::from(&v);
             let candidates: Vec<PathBuf> = if p.is_dir() {
@@ -255,14 +271,30 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
                 vec![p]
             };
             for c in candidates {
-                consider(&mut r, &mut seen, c, Origin::Env(var.clone()), &anchor, anchor_writable, opts);
+                consider(
+                    &mut r,
+                    &mut seen,
+                    c,
+                    Origin::Env(var.clone()),
+                    &anchor,
+                    anchor_writable,
+                    opts,
+                );
             }
         }
     }
 
     // 3. Beside the executable — the sidecar proper.
     for n in names(&stem) {
-        consider(&mut r, &mut seen, anchor.join(n), Origin::Sidecar, &anchor, anchor_writable, opts);
+        consider(
+            &mut r,
+            &mut seen,
+            anchor.join(n),
+            Origin::Sidecar,
+            &anchor,
+            anchor_writable,
+            opts,
+        );
     }
     // .NET's convention: MyApp.exe.config, not MyApp.config.
     if let Some(exe) = &exe {
@@ -270,7 +302,15 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
             for ext in ["config", "json", "ini"] {
                 let mut n = file.to_os_string();
                 n.push(format!(".{ext}"));
-                consider(&mut r, &mut seen, anchor.join(n), Origin::Sidecar, &anchor, anchor_writable, opts);
+                consider(
+                    &mut r,
+                    &mut seen,
+                    anchor.join(n),
+                    Origin::Sidecar,
+                    &anchor,
+                    anchor_writable,
+                    opts,
+                );
             }
         }
     }
@@ -281,10 +321,20 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
         ("APPDATA", Origin::RoamingAppData),
         ("PROGRAMDATA", Origin::ProgramData),
     ] {
-        let Ok(base) = std::env::var(var) else { continue };
+        let Ok(base) = std::env::var(var) else {
+            continue;
+        };
         let dir = PathBuf::from(base).join(&stem);
         for n in names(&stem) {
-            consider(&mut r, &mut seen, dir.join(n), origin.clone(), &anchor, anchor_writable, opts);
+            consider(
+                &mut r,
+                &mut seen,
+                dir.join(n),
+                origin.clone(),
+                &anchor,
+                anchor_writable,
+                opts,
+            );
         }
     }
 
@@ -304,9 +354,13 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
                     };
                     for c in candidates {
                         consider(
-                            &mut r, &mut seen, c,
+                            &mut r,
+                            &mut seen,
+                            c,
                             Origin::RegistryPointer(key.clone()),
-                            &anchor, anchor_writable, opts,
+                            &anchor,
+                            anchor_writable,
+                            opts,
                         );
                     }
                 }
@@ -317,7 +371,15 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
     // 8. The machine's Group Policy caches.
     if opts.policy {
         for p in policy_paths() {
-            consider(&mut r, &mut seen, p, Origin::GroupPolicy, &anchor, anchor_writable, opts);
+            consider(
+                &mut r,
+                &mut seen,
+                p,
+                Origin::GroupPolicy,
+                &anchor,
+                anchor_writable,
+                opts,
+            );
         }
     }
 
@@ -326,10 +388,20 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
         let cwd = canonical(&cwd);
         if cwd != anchor {
             for n in names(&stem) {
-                consider(&mut r, &mut seen, cwd.join(n), Origin::CurrentDirectory, &anchor, anchor_writable, opts);
+                consider(
+                    &mut r,
+                    &mut seen,
+                    cwd.join(n),
+                    Origin::CurrentDirectory,
+                    &anchor,
+                    anchor_writable,
+                    opts,
+                );
             }
         } else {
-            r.notes.push("the working directory is the anchor directory, so no separate CWD risk".into());
+            r.notes.push(
+                "the working directory is the anchor directory, so no separate CWD risk".into(),
+            );
         }
     }
 
@@ -337,7 +409,15 @@ pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
     if let Ok(win) = std::env::var("WINDIR") {
         let win = PathBuf::from(win);
         for n in names(&stem) {
-            consider(&mut r, &mut seen, win.join(n), Origin::WindowsDirectory, &anchor, anchor_writable, opts);
+            consider(
+                &mut r,
+                &mut seen,
+                win.join(n),
+                Origin::WindowsDirectory,
+                &anchor,
+                anchor_writable,
+                opts,
+            );
         }
     }
 
@@ -351,7 +431,9 @@ fn names(stem: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 fn policy_paths() -> Vec<PathBuf> {
-    let Ok(win) = std::env::var("WINDIR") else { return Vec::new() };
+    let Ok(win) = std::env::var("WINDIR") else {
+        return Vec::new();
+    };
     let win = PathBuf::from(win);
     let mut out = vec![
         win.join(r"System32\GroupPolicy\Machine\Registry.pol"),
@@ -369,7 +451,10 @@ fn policy_paths() -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(&defs) {
         for e in entries.flatten().take(4096) {
             let p = e.path();
-            if p.extension().map(|x| x.eq_ignore_ascii_case("admx")).unwrap_or(false) {
+            if p.extension()
+                .map(|x| x.eq_ignore_ascii_case("admx"))
+                .unwrap_or(false)
+            {
                 out.push(p);
             }
         }
@@ -573,7 +658,9 @@ fn registry_pointer(hive: crate::model::Hive, stem: &str, value: &str) -> Option
         }
         _ => RegKey::predefined(winreg::hkey_local_machine(), "HKEY_LOCAL_MACHINE"),
     };
-    let key = root.open(&format!("Software\\{stem}"), KEY_READ, View::Native).ok()?;
+    let key = root
+        .open(&format!("Software\\{stem}"), KEY_READ, View::Native)
+        .ok()?;
     let (ty, bytes) = key.get_value(value).ok()??;
     let data = crate::engine::raw_to_data(ty, &bytes);
     match data {
@@ -620,7 +707,11 @@ mod tests {
         let d = scratch("sidecar");
         std::fs::write(d.join("updater.exe"), b"MZ").unwrap();
         std::fs::write(d.join("updater.ini"), b"[HKCU\\Software\\A]\nX = 1\n").unwrap();
-        std::fs::write(d.join("updater.reg"), b"Windows Registry Editor Version 5.00\r\n").unwrap();
+        std::fs::write(
+            d.join("updater.reg"),
+            b"Windows Registry Editor Version 5.00\r\n",
+        )
+        .unwrap();
         std::fs::write(d.join("unrelated.ini"), b"x").unwrap();
 
         let r = discover(&d.join("updater.exe"), &Options::default()).unwrap();
@@ -633,9 +724,16 @@ mod tests {
             .collect();
         assert!(names.contains(&"updater.ini".to_string()), "{names:?}");
         assert!(names.contains(&"updater.reg".to_string()), "{names:?}");
-        assert!(!names.contains(&"unrelated.ini".to_string()), "must match the stem only");
+        assert!(
+            !names.contains(&"unrelated.ini".to_string()),
+            "must match the stem only"
+        );
 
-        let ini = r.found.iter().find(|f| f.path.extension().unwrap() == "ini").unwrap();
+        let ini = r
+            .found
+            .iter()
+            .find(|f| f.path.extension().unwrap() == "ini")
+            .unwrap();
         assert_eq!(ini.origin, Origin::Sidecar);
         assert_eq!(ini.format, Some(Format::Ini));
         let _ = std::fs::remove_dir_all(&d);
@@ -648,8 +746,11 @@ mod tests {
         std::fs::write(d.join("svc.exe.json"), b"{}").unwrap();
         let r = discover(&d.join("svc.exe"), &Options::default()).unwrap();
         assert!(
-            r.found.iter().any(|f| f.path.file_name().unwrap() == "svc.exe.json"),
-            "{:?}", r.found
+            r.found
+                .iter()
+                .any(|f| f.path.file_name().unwrap() == "svc.exe.json"),
+            "{:?}",
+            r.found
         );
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -671,7 +772,11 @@ mod tests {
             .iter()
             .find(|f| f.origin == Origin::CurrentDirectory)
             .expect("the CWD copy should be found");
-        assert!(hit.risks.contains(&Risk::CurrentDirectory), "{:?}", hit.risks);
+        assert!(
+            hit.risks.contains(&Risk::CurrentDirectory),
+            "{:?}",
+            hit.risks
+        );
         let _ = std::fs::remove_dir_all(&anchor);
         let _ = std::fs::remove_dir_all(&cwd);
     }
@@ -688,7 +793,11 @@ mod tests {
         let r = discover(&d.join("app.exe"), &Options::default()).unwrap();
         unsafe { std::env::remove_var("APP_CONFIG") };
 
-        assert!(matches!(r.found[0].origin, Origin::Env(_)), "{:?}", r.found[0].origin);
+        assert!(
+            matches!(r.found[0].origin, Origin::Env(_)),
+            "{:?}",
+            r.found[0].origin
+        );
         assert!(r.found[0].origin.rank() < Origin::Sidecar.rank());
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&alt);
@@ -709,7 +818,10 @@ mod tests {
         assert!(dir_writable(&std::env::temp_dir()));
         // If this fails the test host is elevated, which the product forbids.
         let win = PathBuf::from(std::env::var("WINDIR").unwrap());
-        assert!(!dir_writable(&win.join("System32")), "System32 should not be writable");
+        assert!(
+            !dir_writable(&win.join("System32")),
+            "System32 should not be writable"
+        );
     }
 
     #[test]

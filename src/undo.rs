@@ -98,10 +98,7 @@ pub fn snapshot(roots: &Roots, file: &RegFile, view: View) -> Snapshot {
                     data: RegData::Delete,
                     line: 0,
                 }),
-                Err(e) => unreadable.push((
-                    format!("{}\\\\{}", block.path, v.name),
-                    e.to_string(),
-                )),
+                Err(e) => unreadable.push((format!("{}\\{}", block.path, v.name), e.to_string())),
             }
         }
         if !prior.is_empty() {
@@ -180,7 +177,11 @@ mod tests {
             delete: false,
             values: values
                 .into_iter()
-                .map(|(name, data)| ValueEntry { name, data, line: 0 })
+                .map(|(name, data)| ValueEntry {
+                    name,
+                    data,
+                    line: 0,
+                })
                 .collect(),
             line: 0,
         }
@@ -203,9 +204,14 @@ mod tests {
         // Seed: one pre-existing key with one value.
         let seed = file(vec![block(
             &format!("HKEY_CURRENT_USER\\{base}"),
-            vec![(ValueName::Named("keep".into()), RegData::Sz("before".into()))],
+            vec![(
+                ValueName::Named("keep".into()),
+                RegData::Sz("before".into()),
+            )],
         )]);
-        assert!(apply(&roots, &seed, View::Native, false).failures.is_empty());
+        assert!(apply(&roots, &seed, View::Native, false)
+            .failures
+            .is_empty());
 
         // Change: overwrite `keep`, add `added`, and create a nested new key.
         let change = file(vec![
@@ -228,7 +234,9 @@ mod tests {
         assert_eq!(snap.new_keys.len(), 1);
         assert!(snap.new_keys[0].ends_with("\\new"), "{:?}", snap.new_keys);
 
-        assert!(apply(&roots, &change, View::Native, false).failures.is_empty());
+        assert!(apply(&roots, &change, View::Native, false)
+            .failures
+            .is_empty());
 
         // Roll back and verify we are byte-identical to the seed state.
         let r = apply(&roots, &snap.file, View::Native, false);

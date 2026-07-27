@@ -38,7 +38,10 @@ const T_QWORD: u32 = 0x0003_0000;
 
 const FLG_DELREG_VALUE: u32 = 0x0000_0004;
 
-pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
+pub fn read(
+    bytes: &[u8],
+    only_section: Option<&str>,
+) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
     let (text, _) = crate::encoding::decode(bytes);
     let sections = split_sections(&text);
     let mut notes = Vec::new();
@@ -54,9 +57,14 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
     let mut del: Vec<String> = Vec::new();
     for (_, lines) in &sections {
         for (_, line) in lines {
-            let Some((lhs, rhs)) = line.split_once('=') else { continue };
+            let Some((lhs, rhs)) = line.split_once('=') else {
+                continue;
+            };
             let key = lhs.trim();
-            let targets = rhs.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            let targets = rhs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
             if key.eq_ignore_ascii_case("AddReg") {
                 add.extend(targets);
             } else if key.eq_ignore_ascii_case("DelReg") {
@@ -77,7 +85,9 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
             }
         }
         if !add.is_empty() || !del.is_empty() {
-            notes.push("no AddReg=/DelReg= directive found; used sections named *AddReg*/*DelReg*".into());
+            notes.push(
+                "no AddReg=/DelReg= directive found; used sections named *AddReg*/*DelReg*".into(),
+            );
         }
     }
 
@@ -85,7 +95,9 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
         add.retain(|s| s.eq_ignore_ascii_case(want));
         del.retain(|s| s.eq_ignore_ascii_case(want));
         if add.is_empty() && del.is_empty() {
-            return Err(format!("no AddReg/DelReg section named {want:?} in this INF"));
+            return Err(format!(
+                "no AddReg/DelReg section named {want:?} in this INF"
+            ));
         }
     }
 
@@ -94,7 +106,10 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
     }
 
     let find = |want: &str| -> Option<&Vec<(usize, String)>> {
-        sections.iter().find(|(n, _)| n.eq_ignore_ascii_case(want)).map(|(_, l)| l)
+        sections
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(want))
+            .map(|(_, l)| l)
     };
 
     let mut blocks: Vec<KeyBlock> = Vec::new();
@@ -102,7 +117,9 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
 
     for name in &add {
         let Some(lines) = find(name) else {
-            notes.push(format!("AddReg references [{name}], which this file does not define"));
+            notes.push(format!(
+                "AddReg references [{name}], which this file does not define"
+            ));
             continue;
         };
         used.push(name.clone());
@@ -121,7 +138,9 @@ pub fn read(bytes: &[u8], only_section: Option<&str>) -> Result<(Vec<KeyBlock>, 
 
     for name in &del {
         let Some(lines) = find(name) else {
-            notes.push(format!("DelReg references [{name}], which this file does not define"));
+            notes.push(format!(
+                "DelReg references [{name}], which this file does not define"
+            ));
             continue;
         };
         used.push(name.clone());
@@ -163,14 +182,21 @@ fn add_line(
 
     let hive = root(&f[0])?;
     let sub = expand(&f[1], strings);
-    let path = RegPath { hive, sub: sub.trim_matches('\\').to_string() };
+    let path = RegPath {
+        hive,
+        sub: sub.trim_matches('\\').to_string(),
+    };
 
     if f.len() < 3 || f[2..].iter().all(|x| x.is_empty()) {
         return Ok(Some((path, None)));
     }
 
     let name = crate::formats::value_name(&expand(&f[2], strings));
-    let flags = if f.len() > 3 { number(&f[3]).unwrap_or(0) as u32 } else { 0 };
+    let flags = if f.len() > 3 {
+        number(&f[3]).unwrap_or(0) as u32
+    } else {
+        0
+    };
     let raw: Vec<String> = f[4..].iter().map(|x| expand(x, strings)).collect();
 
     let data = match flags & TYPE_MASK {
@@ -185,7 +211,10 @@ fn add_line(
                 bytes.extend_from_slice(&crate::engine::utf16_nul(s));
             }
             bytes.extend_from_slice(&[0, 0]);
-            RegData::Hex { ty: REG_MULTI_SZ, bytes }
+            RegData::Hex {
+                ty: REG_MULTI_SZ,
+                bytes,
+            }
         }
         T_DWORD => {
             let v = raw
@@ -199,7 +228,10 @@ fn add_line(
                 .first()
                 .and_then(|s| number(s))
                 .ok_or_else(|| format!("invalid QWORD data {:?}", raw.join(",")))?;
-            RegData::Hex { ty: REG_QWORD, bytes: v.to_le_bytes().to_vec() }
+            RegData::Hex {
+                ty: REG_QWORD,
+                bytes: v.to_le_bytes().to_vec(),
+            }
         }
         T_BINARY | T_NONE => {
             let mut bytes = Vec::with_capacity(raw.len());
@@ -209,13 +241,24 @@ fn add_line(
                         .map_err(|_| format!("invalid binary byte {tok:?}"))?,
                 );
             }
-            let ty = if flags & TYPE_MASK == T_NONE { REG_NONE } else { REG_BINARY };
+            let ty = if flags & TYPE_MASK == T_NONE {
+                REG_NONE
+            } else {
+                REG_BINARY
+            };
             RegData::Hex { ty, bytes }
         }
         other => return Err(format!("unsupported AddReg type flag 0x{other:08x}")),
     };
 
-    Ok(Some((path, Some(ValueEntry { name, data, line: 0 }))))
+    Ok(Some((
+        path,
+        Some(ValueEntry {
+            name,
+            data,
+            line: 0,
+        }),
+    )))
 }
 
 /// `root, subkey [, value [, flags]]` — no value name deletes the whole key.
@@ -236,11 +279,22 @@ fn del_line(
     };
 
     let has_value = f.len() > 2 && !f[2].is_empty();
-    let flags = if f.len() > 3 { number(&f[3]).unwrap_or(0) as u32 } else { 0 };
+    let flags = if f.len() > 3 {
+        number(&f[3]).unwrap_or(0) as u32
+    } else {
+        0
+    };
 
     if has_value || flags & FLG_DELREG_VALUE != 0 {
         let name = crate::formats::value_name(&expand(&f[2], strings));
-        return Ok(Some((path, Some(ValueEntry { name, data: RegData::Delete, line: 0 }))));
+        return Ok(Some((
+            path,
+            Some(ValueEntry {
+                name,
+                data: RegData::Delete,
+                line: 0,
+            }),
+        )));
     }
     Ok(Some((path, None)))
 }
@@ -297,9 +351,9 @@ fn expand(s: &str, strings: &HashMap<String, String>) -> String {
     while let Some(start) = rest.find('%') {
         out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
-        if after.starts_with('%') {
+        if let Some(tail) = after.strip_prefix('%') {
             out.push('%');
-            rest = &after[1..];
+            rest = tail;
             continue;
         }
         match after.find('%') {
@@ -371,12 +425,17 @@ fn split_sections(text: &str) -> Vec<(String, Vec<(usize, String)>)> {
     out
 }
 
-fn block_for<'a>(blocks: &'a mut Vec<KeyBlock>, path: RegPath, line: usize) -> &'a mut KeyBlock {
+fn block_for(blocks: &mut Vec<KeyBlock>, path: RegPath, line: usize) -> &mut KeyBlock {
     let fold = path.fold();
     if let Some(i) = blocks.iter().position(|b| b.path.fold() == fold) {
         return &mut blocks[i];
     }
-    blocks.push(KeyBlock { path, delete: false, values: Vec::new(), line });
+    blocks.push(KeyBlock {
+        path,
+        delete: false,
+        values: Vec::new(),
+        line,
+    });
     blocks.last_mut().unwrap()
 }
 
@@ -415,10 +474,22 @@ SERVER = "acme.test"
     #[test]
     fn reads_every_addreg_type() {
         let (blocks, notes) = read(SAMPLE.as_bytes(), None).unwrap();
-        let hkcu = blocks.iter().find(|b| b.path.sub == "Software\\Acme" && b.path.hive == Hive::Hkcu).unwrap();
+        let hkcu = blocks
+            .iter()
+            .find(|b| b.path.sub == "Software\\Acme" && b.path.hive == Hive::Hkcu)
+            .unwrap();
 
-        let get = |n: &str| hkcu.values.iter().find(|v| matches!(&v.name, ValueName::Named(x) if x == n)).unwrap();
-        assert_eq!(get("Server").data, RegData::Sz("acme.test".into()), "[Strings] token");
+        let get = |n: &str| {
+            hkcu.values
+                .iter()
+                .find(|v| matches!(&v.name, ValueName::Named(x) if x == n))
+                .unwrap()
+        };
+        assert_eq!(
+            get("Server").data,
+            RegData::Sz("acme.test".into()),
+            "[Strings] token"
+        );
         assert_eq!(get("Port").data, RegData::Dword(8080));
         assert_eq!(get("Path").data.type_id(), Some(REG_EXPAND_SZ));
         assert_eq!(get("List").data.type_id(), Some(REG_MULTI_SZ));
@@ -427,17 +498,29 @@ SERVER = "acme.test"
         let hklm = blocks.iter().find(|b| b.path.hive == Hive::Hklm).unwrap();
         assert_eq!(
             hklm.values[0].data,
-            RegData::Hex { ty: REG_BINARY, bytes: vec![1, 2, 255] }
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes: vec![1, 2, 255]
+            }
         );
     }
 
     #[test]
     fn delreg_distinguishes_value_from_key() {
         let (blocks, _) = read(SAMPLE.as_bytes(), None).unwrap();
-        let acme = blocks.iter().find(|b| b.path.sub == "Software\\Acme" && b.path.hive == Hive::Hkcu).unwrap();
+        let acme = blocks
+            .iter()
+            .find(|b| b.path.sub == "Software\\Acme" && b.path.hive == Hive::Hkcu)
+            .unwrap();
         assert!(acme.values.iter().any(|v| v.data == RegData::Delete));
-        let old = blocks.iter().find(|b| b.path.sub == "Software\\AcmeOld").unwrap();
-        assert!(old.delete, "a DelReg line with no value name deletes the key");
+        let old = blocks
+            .iter()
+            .find(|b| b.path.sub == "Software\\AcmeOld")
+            .unwrap();
+        assert!(
+            old.delete,
+            "a DelReg line with no value name deletes the key"
+        );
     }
 
     #[test]
@@ -445,7 +528,11 @@ SERVER = "acme.test"
         let m = HashMap::from([("server".to_string(), "acme.test".to_string())]);
         assert_eq!(expand("%%SystemRoot%%\\x", &m), "%SystemRoot%\\x");
         assert_eq!(expand("%SERVER%", &m), "acme.test");
-        assert_eq!(expand("%unknown%", &m), "%unknown%", "unknown tokens stay verbatim");
+        assert_eq!(
+            expand("%unknown%", &m),
+            "%unknown%",
+            "unknown tokens stay verbatim"
+        );
     }
 
     #[test]
@@ -457,7 +544,8 @@ SERVER = "acme.test"
 
     #[test]
     fn hkr_is_reported_not_guessed() {
-        let inf = "[Version]\nSignature=\"$WINDOWS NT$\"\n[X]\nAddReg=R\n[R]\nHKR,,\"V\",0x0,\"d\"\n";
+        let inf =
+            "[Version]\nSignature=\"$WINDOWS NT$\"\n[X]\nAddReg=R\n[R]\nHKR,,\"V\",0x0,\"d\"\n";
         let (blocks, notes) = read(inf.as_bytes(), None).unwrap();
         assert!(blocks.is_empty());
         assert!(notes.iter().any(|n| n.contains("HKR")), "{notes:?}");

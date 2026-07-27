@@ -5,7 +5,9 @@ fn main() {
         return;
     }
 
-    let manifest: PathBuf = [env!("CARGO_MANIFEST_DIR"), "app.manifest"].iter().collect();
+    let manifest: PathBuf = [env!("CARGO_MANIFEST_DIR"), "app.manifest"]
+        .iter()
+        .collect();
     println!("cargo:rerun-if-changed=app.manifest");
 
     // Embed the manifest directly into the PE, keeping the "one file only"

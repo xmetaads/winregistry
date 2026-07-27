@@ -35,7 +35,9 @@ pub struct ParseOutcome {
 
 impl ParseOutcome {
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 }
 
@@ -112,7 +114,10 @@ impl Parser {
                 format = RegFormat::V4;
                 idx += 1;
             }
-            Some(h) if h.to_ascii_lowercase().starts_with("windows registry editor version 5") => {
+            Some(h)
+                if h.to_ascii_lowercase()
+                    .starts_with("windows registry editor version 5") =>
+            {
                 format = RegFormat::V5;
                 idx += 1;
             }
@@ -142,7 +147,11 @@ impl Parser {
                     continue;
                 }
                 let more = t.ends_with('\\');
-                acc.push_str(if more { t.trim_end_matches('\\').trim_end() } else { t });
+                acc.push_str(if more {
+                    t.trim_end_matches('\\').trim_end()
+                } else {
+                    t
+                });
                 if more {
                     pending = Some((start, acc));
                 } else {
@@ -254,7 +263,10 @@ impl Parser {
             return match unquote(rhs) {
                 Ok((s, tail)) => {
                     if !tail.trim().is_empty() {
-                        self.warn(line, format!("ignoring text after string: {:?}", tail.trim()));
+                        self.warn(
+                            line,
+                            format!("ignoring text after string: {:?}", tail.trim()),
+                        );
                     }
                     Some(RegData::Sz(s))
                 }
@@ -325,7 +337,10 @@ impl Parser {
         match ty {
             REG_SZ | REG_EXPAND_SZ | REG_LINK => {
                 if bytes.len() % 2 != 0 {
-                    self.warn(line, "string payload has an odd byte count (not valid UTF-16LE)");
+                    self.warn(
+                        line,
+                        "string payload has an odd byte count (not valid UTF-16LE)",
+                    );
                 } else if !bytes.ends_with(&[0, 0]) {
                     self.warn(
                         line,
@@ -345,18 +360,27 @@ impl Parser {
             }
             REG_DWORD | REG_DWORD_BIG_ENDIAN => {
                 if bytes.len() != 4 {
-                    self.warn(line, format!("DWORD payload is {} bytes, expected 4", bytes.len()));
+                    self.warn(
+                        line,
+                        format!("DWORD payload is {} bytes, expected 4", bytes.len()),
+                    );
                 }
             }
             REG_QWORD => {
                 if bytes.len() != 8 {
-                    self.warn(line, format!("QWORD payload is {} bytes, expected 8", bytes.len()));
+                    self.warn(
+                        line,
+                        format!("QWORD payload is {} bytes, expected 8", bytes.len()),
+                    );
                 }
             }
             _ => {}
         }
         if bytes.len() > 1_048_576 {
-            self.warn(line, "value exceeds 1 MB - Microsoft recommends a file reference instead");
+            self.warn(
+                line,
+                "value exceeds 1 MB - Microsoft recommends a file reference instead",
+            );
         }
     }
 }
@@ -451,7 +475,10 @@ mod tests {
         assert!(!out.has_errors(), "{:?}", out.diagnostics);
         assert_eq!(
             out.file.keys[0].values[0].data,
-            RegData::Hex { ty: REG_BINARY, bytes: vec![1, 2, 3, 4] }
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes: vec![1, 2, 3, 4]
+            }
         );
     }
 
@@ -475,6 +502,9 @@ mod tests {
             "Windows Registry Editor Version 5.00\r\n[HKEY_CURRENT_USER\\A]\r\n\"m\"=hex(7):61,00\r\n",
         );
         assert!(!out.has_errors());
-        assert!(out.diagnostics.iter().any(|d| d.message.contains("double NUL")));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("double NUL")));
     }
 }

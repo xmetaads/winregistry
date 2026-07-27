@@ -66,7 +66,12 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
             notes.push("explicit form (top-level array)".into());
             return explicit(&v, notes);
         }
-        other => return Err(format!("top level must be an object or array, found {}", kind(other))),
+        other => {
+            return Err(format!(
+                "top level must be an object or array, found {}",
+                kind(other)
+            ))
+        }
     };
 
     for (path, body) in root {
@@ -136,8 +141,9 @@ fn explicit(v: &Json, notes: Vec<String>) -> Result<(Vec<KeyBlock>, Vec<String>)
                         };
                         let raw = vget("data").cloned().unwrap_or(Json::Null);
                         let data = match vget("type") {
-                            Some(Json::Str(t)) => typed(t, &raw)
-                                .map_err(|e| format!("keys[{i}].values[{j}]: {e}"))?,
+                            Some(Json::Str(t)) => {
+                                typed(t, &raw).map_err(|e| format!("keys[{i}].values[{j}]: {e}"))?
+                            }
                             None => data_of(&raw, &name)?,
                             Some(o) => {
                                 return Err(format!(
@@ -187,7 +193,10 @@ fn data_of(v: &Json, name: &str) -> Result<RegData, String> {
                 RegData::Dword(v)
             } else {
                 // Too wide for a DWORD: widen rather than truncate.
-                RegData::Hex { ty: REG_QWORD, bytes: (*i as u64).to_le_bytes().to_vec() }
+                RegData::Hex {
+                    ty: REG_QWORD,
+                    bytes: (*i as u64).to_le_bytes().to_vec(),
+                }
             }
         }
         Json::Num(f) => {
@@ -210,12 +219,20 @@ fn data_of(v: &Json, name: &str) -> Result<RegData, String> {
                 }
             }
             bytes.extend_from_slice(&[0, 0]);
-            RegData::Hex { ty: REG_MULTI_SZ, bytes }
+            RegData::Hex {
+                ty: REG_MULTI_SZ,
+                bytes,
+            }
         }
         // { "type": ..., "data": ... } used as a value directly.
         Json::Obj(f) => {
             let t = f.iter().find(|(k, _)| k == "type").map(|(_, v)| v);
-            let d = f.iter().find(|(k, _)| k == "data").map(|(_, v)| v).cloned().unwrap_or(Json::Null);
+            let d = f
+                .iter()
+                .find(|(k, _)| k == "data")
+                .map(|(_, v)| v)
+                .cloned()
+                .unwrap_or(Json::Null);
             match t {
                 Some(Json::Str(t)) => typed(t, &d).map_err(|e| format!("{name:?}: {e}"))?,
                 _ => return Err(format!("{name:?}: an object value needs a string \"type\"")),
@@ -238,7 +255,12 @@ fn typed(t: &str, v: &Json) -> Result<RegData, String> {
             for it in items {
                 match it {
                     Json::Str(s) => parts.push(s.clone()),
-                    other => return Err(format!("array elements must be strings, found {}", kind(other))),
+                    other => {
+                        return Err(format!(
+                            "array elements must be strings, found {}",
+                            kind(other)
+                        ))
+                    }
                 }
             }
             // parse_typed uses the reg.exe convention for REG_MULTI_SZ.
@@ -293,12 +315,19 @@ impl<'a> P<'a> {
     }
 
     fn at(&self) -> Result<char, String> {
-        self.b.get(self.i).copied().ok_or_else(|| "unexpected end of JSON".to_string())
+        self.b
+            .get(self.i)
+            .copied()
+            .ok_or_else(|| "unexpected end of JSON".to_string())
     }
 
     fn eat(&mut self, c: char) -> Result<(), String> {
         if self.at()? != c {
-            return Err(format!("expected {c:?} at character {}, found {:?}", self.i + 1, self.b[self.i]));
+            return Err(format!(
+                "expected {c:?} at character {}, found {:?}",
+                self.i + 1,
+                self.b[self.i]
+            ));
         }
         self.i += 1;
         Ok(())
@@ -341,7 +370,10 @@ impl<'a> P<'a> {
             let k = self.string()?;
             // Duplicate keys in a registry document are always a mistake.
             if let Some(prev) = seen.insert(k.clone(), self.i) {
-                return Err(format!("duplicate key {k:?} (first seen at character {})", prev + 1));
+                return Err(format!(
+                    "duplicate key {k:?} (first seen at character {})",
+                    prev + 1
+                ));
             }
             self.ws();
             self.eat(':')?;
@@ -354,7 +386,12 @@ impl<'a> P<'a> {
                     self.i += 1;
                     return Ok(Json::Obj(out));
                 }
-                c => return Err(format!("expected ',' or '}}' at character {}, found {c:?}", self.i + 1)),
+                c => {
+                    return Err(format!(
+                        "expected ',' or '}}' at character {}, found {c:?}",
+                        self.i + 1
+                    ))
+                }
             }
         }
     }
@@ -376,7 +413,12 @@ impl<'a> P<'a> {
                     self.i += 1;
                     return Ok(Json::Arr(out));
                 }
-                c => return Err(format!("expected ',' or ']' at character {}, found {c:?}", self.i + 1)),
+                c => {
+                    return Err(format!(
+                        "expected ',' or ']' at character {}, found {c:?}",
+                        self.i + 1
+                    ))
+                }
             }
         }
     }
@@ -424,22 +466,22 @@ impl<'a> P<'a> {
                         // so name the fix instead of just the rule.
                         other if other.is_alphanumeric() => {
                             return Err(format!(
-                                "invalid escape \\{other} at character {}: JSON has no such escape. \
+                            "invalid escape \\{other} at character {}: JSON has no such escape. \
                                  A Windows registry path needs doubled backslashes — \
                                  write \"HKCU\\\\Software\\\\Acme\", not \"HKCU\\Software\\Acme\".",
-                                self.i
-                            ))
+                            self.i
+                        ))
                         }
                         other => {
-                            return Err(format!(
-                                "invalid escape \\{other} at character {}",
-                                self.i
-                            ))
+                            return Err(format!("invalid escape \\{other} at character {}", self.i))
                         }
                     }
                 }
                 c if (c as u32) < 0x20 => {
-                    return Err(format!("raw control character U+{:04X} in string", c as u32))
+                    return Err(format!(
+                        "raw control character U+{:04X} in string",
+                        c as u32
+                    ))
                 }
                 c => s.push(c),
             }
@@ -487,9 +529,13 @@ impl<'a> P<'a> {
         }
         let s: String = self.b[start..self.i].iter().collect();
         if float {
-            s.parse::<f64>().map(Json::Num).map_err(|_| format!("invalid number {s:?}"))
+            s.parse::<f64>()
+                .map(Json::Num)
+                .map_err(|_| format!("invalid number {s:?}"))
         } else {
-            s.parse::<i64>().map(Json::Int).map_err(|_| format!("number {s:?} is out of range"))
+            s.parse::<i64>()
+                .map(Json::Int)
+                .map_err(|_| format!("number {s:?} is out of range"))
         }
     }
 }
@@ -514,15 +560,30 @@ mod tests {
         let (blocks, _) = read(src.as_bytes()).unwrap();
         assert_eq!(blocks.len(), 1);
         let v = |n: &str| {
-            blocks[0].values.iter()
-                .find(|v| matches!(&v.name, ValueName::Named(x) if x == n)).unwrap().data.clone()
+            blocks[0]
+                .values
+                .iter()
+                .find(|v| matches!(&v.name, ValueName::Named(x) if x == n))
+                .unwrap()
+                .data
+                .clone()
         };
         assert_eq!(v("Server"), RegData::Sz("acme.test".into()));
         assert_eq!(v("Port"), RegData::Dword(8080));
         assert_eq!(v("Enabled"), RegData::Dword(1));
-        assert_eq!(v("Big").type_id(), Some(REG_QWORD), "widen rather than truncate");
+        assert_eq!(
+            v("Big").type_id(),
+            Some(REG_QWORD),
+            "widen rather than truncate"
+        );
         assert_eq!(v("List").type_id(), Some(REG_MULTI_SZ));
-        assert_eq!(v("Blob"), RegData::Hex { ty: REG_BINARY, bytes: vec![1, 2, 255] });
+        assert_eq!(
+            v("Blob"),
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes: vec![1, 2, 255]
+            }
+        );
         assert_eq!(v("Legacy"), RegData::Delete);
     }
 
@@ -558,9 +619,14 @@ mod tests {
 
     #[test]
     fn parses_escapes_and_surrogate_pairs() {
-        let Json::Str(s) = parse(r#""aA\n\\\"😀""#).unwrap() else { panic!() };
+        let Json::Str(s) = parse(r#""aA\n\\\"😀""#).unwrap() else {
+            panic!()
+        };
         assert_eq!(s, "aA\n\\\"\u{1F600}");
-        assert!(parse("\"raw\ttab\"").is_err(), "control chars must be escaped");
+        assert!(
+            parse("\"raw\ttab\"").is_err(),
+            "control chars must be escaped"
+        );
     }
 
     #[test]

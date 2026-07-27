@@ -61,16 +61,16 @@ pub fn map(path: &RegPath, policy: Policy) -> Mapping {
             return Mapping {
                 to: None,
                 confidence: Confidence::Refuse,
-                reason: "HKCC is a live view of the hardware profile; it has no per-user equivalent",
+                reason:
+                    "HKCC is a live view of the hardware profile; it has no per-user equivalent",
             }
         }
-        Hive::Hku => {
-            return Mapping {
-                to: None,
-                confidence: Confidence::Low,
-                reason: "HKEY_USERS targets a specific SID; resolve it explicitly instead of redirecting",
-            }
-        }
+        Hive::Hku => return Mapping {
+            to: None,
+            confidence: Confidence::Low,
+            reason:
+                "HKEY_USERS targets a specific SID; resolve it explicitly instead of redirecting",
+        },
         _ => {}
     }
 
@@ -107,8 +107,10 @@ pub fn map(path: &RegPath, policy: Policy) -> Mapping {
         reason,
     };
 
-    if upper.starts_with("SYSTEM") || upper.starts_with("HARDWARE")
-        || upper.starts_with("SAM") || upper.starts_with("SECURITY")
+    if upper.starts_with("SYSTEM")
+        || upper.starts_with("HARDWARE")
+        || upper.starts_with("SAM")
+        || upper.starts_with("SECURITY")
         || upper.starts_with("BCD")
     {
         return Mapping {
@@ -143,7 +145,12 @@ pub fn map(path: &RegPath, policy: Policy) -> Mapping {
         );
     }
 
-    if strip_ci(&sub, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies").is_some() {
+    if strip_ci(
+        &sub,
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies",
+    )
+    .is_some()
+    {
         return hkcu(
             &sub,
             Confidence::Low,
@@ -211,7 +218,7 @@ fn strip_ci<'a>(sub: &'a str, prefix: &str) -> Option<&'a str> {
     if !sub[..prefix.len()].eq_ignore_ascii_case(prefix) {
         return None;
     }
-    match sub[prefix.len()..].as_bytes().first() {
+    match sub.as_bytes().get(prefix.len()) {
         None => Some(""),
         Some(b'\\') => Some(sub[prefix.len() + 1..].trim_start_matches('\\')),
         Some(_) => None, // partial component match, e.g. "SOFTWAREX"
@@ -236,21 +243,33 @@ mod tests {
 
     #[test]
     fn classes_map_with_high_confidence() {
-        let m = map(&p("HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\.txt"), Policy::Auto);
+        let m = map(
+            &p("HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\.txt"),
+            Policy::Auto,
+        );
         assert_eq!(m.confidence, Confidence::High);
-        assert_eq!(m.to.unwrap().to_string(), "HKEY_CURRENT_USER\\SOFTWARE\\Classes\\.txt");
+        assert_eq!(
+            m.to.unwrap().to_string(),
+            "HKEY_CURRENT_USER\\SOFTWARE\\Classes\\.txt"
+        );
     }
 
     #[test]
     fn system_hive_is_refused() {
-        let m = map(&p("HKLM\\SYSTEM\\CurrentControlSet\\Services\\Foo"), Policy::Auto);
+        let m = map(
+            &p("HKLM\\SYSTEM\\CurrentControlSet\\Services\\Foo"),
+            Policy::Auto,
+        );
         assert_eq!(m.confidence, Confidence::Refuse);
         assert!(m.to.is_none());
     }
 
     #[test]
     fn machine_policy_is_low_confidence() {
-        let m = map(&p("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender"), Policy::Auto);
+        let m = map(
+            &p("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender"),
+            Policy::Auto,
+        );
         assert_eq!(m.confidence, Confidence::Low);
     }
 
@@ -262,10 +281,7 @@ mod tests {
 
     #[test]
     fn userchoice_is_refused() {
-        let m = map(
-            &p("HKEY_CLASSES_ROOT\\.pdf\\UserChoice"),
-            Policy::Auto,
-        );
+        let m = map(&p("HKEY_CLASSES_ROOT\\.pdf\\UserChoice"), Policy::Auto);
         assert_eq!(m.confidence, Confidence::Refuse);
     }
 

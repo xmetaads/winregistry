@@ -97,7 +97,12 @@ impl std::fmt::Display for OpenError {
 impl std::error::Error for OpenError {}
 
 /// Mount `path` as an app hive for the lifetime of the returned `Session`.
-pub fn open(path: &Path, writable: bool, create: bool, exclusive: bool) -> Result<Session, OpenError> {
+pub fn open(
+    path: &Path,
+    writable: bool,
+    create: bool,
+    exclusive: bool,
+) -> Result<Session, OpenError> {
     let exists = path.exists();
 
     if !exists && !create {

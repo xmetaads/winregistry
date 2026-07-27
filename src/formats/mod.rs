@@ -10,8 +10,8 @@
 pub mod admx;
 pub mod csv;
 pub mod gpp;
-pub mod ini;
 pub mod inf;
+pub mod ini;
 pub mod json;
 pub mod pol;
 
@@ -196,9 +196,12 @@ fn sniff_text(head: &str) -> Format {
 }
 
 /// Read any supported format into the common model.
-pub fn read(bytes: &[u8], path: Option<&Path>, forced: Option<Format>, opts: &ReadOptions)
-    -> Result<ReadOutcome, String>
-{
+pub fn read(
+    bytes: &[u8],
+    path: Option<&Path>,
+    forced: Option<Format>,
+    opts: &ReadOptions,
+) -> Result<ReadOutcome, String> {
     let format = forced.unwrap_or_else(|| detect(bytes, path));
 
     let (keys, mut notes) = match format {
@@ -285,7 +288,10 @@ mod tests {
 
     #[test]
     fn detects_by_magic_before_extension() {
-        assert_eq!(detect(b"PReg\x01\x00\x00\x00", Some(Path::new("x.txt"))), Format::Pol);
+        assert_eq!(
+            detect(b"PReg\x01\x00\x00\x00", Some(Path::new("x.txt"))),
+            Format::Pol
+        );
         assert_eq!(detect(b"regf....", Some(Path::new("x.reg"))), Format::Hive);
     }
 
@@ -294,7 +300,10 @@ mod tests {
         let reg = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\A]\r\n";
         assert_eq!(detect(reg.as_bytes(), None), Format::Reg);
         let ini = "[HKEY_CURRENT_USER\\A]\r\nName=x\r\n";
-        assert_eq!(detect(ini.as_bytes(), Some(Path::new("a.ini"))), Format::Ini);
+        assert_eq!(
+            detect(ini.as_bytes(), Some(Path::new("a.ini"))),
+            Format::Ini
+        );
         assert_eq!(detect(b"[ {\"path\": \"HKCU\\\\A\"} ]", None), Format::Json);
     }
 
@@ -304,7 +313,10 @@ mod tests {
         assert_eq!(detect(inf.as_bytes(), None), Format::Inf);
         // A plain INI with a [Version] section must not be claimed as an INF.
         let ini = "[Version]\r\nBuild=3\r\n";
-        assert_eq!(detect(ini.as_bytes(), Some(Path::new("a.ini"))), Format::Ini);
+        assert_eq!(
+            detect(ini.as_bytes(), Some(Path::new("a.ini"))),
+            Format::Ini
+        );
     }
 
     #[test]

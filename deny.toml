@@ -1,0 +1,39 @@
+# cargo-deny: the two questions procurement asks about a dependency tree.
+#   1. Is anything in it known-vulnerable?
+#   2. Is every licence in it acceptable to redistribute?
+#
+# regx has two direct dependencies (clap, anyhow) precisely so this stays a
+# short answer. Run locally with `cargo deny check`.
+
+[advisories]
+# Fail on any advisory. There is no dependency here whose breakage would be
+# worth tolerating a known vulnerability for.
+yanked = "deny"
+unmaintained = "workspace"
+
+# cargo-deny spells this section the US way; the table name is not ours to choose.
+[licenses]
+# Permissive licences only. Anything copyleft in a redistributed binary is a
+# question for a lawyer, not a default.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# A duplicate major version usually means two crates disagree on a dependency;
+# worth seeing rather than silently shipping both.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

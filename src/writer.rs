@@ -145,7 +145,10 @@ mod tests {
                 delete: false,
                 values: vec![ValueEntry {
                     name: ValueName::Named("big".into()),
-                    data: RegData::Hex { ty: REG_BINARY, bytes: bytes.clone() },
+                    data: RegData::Hex {
+                        ty: REG_BINARY,
+                        bytes: bytes.clone(),
+                    },
                     line: 0,
                 }],
                 line: 0,
@@ -157,7 +160,10 @@ mod tests {
         assert!(!back.has_errors(), "{:?}", back.diagnostics);
         assert_eq!(
             back.file.keys[0].values[0].data,
-            RegData::Hex { ty: REG_BINARY, bytes }
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes
+            }
         );
     }
 }

@@ -130,7 +130,12 @@ fn wow64() -> Vec<Finding> {
 fn image_location() -> Finding {
     let exe = crate::discover::own_executable().unwrap_or_else(|| PathBuf::from("<unknown>"));
     let lower = exe.to_string_lossy().to_lowercase();
-    let risky = ["\\temp\\", "\\downloads\\", "\\appdata\\", "\\users\\public\\"];
+    let risky = [
+        "\\temp\\",
+        "\\downloads\\",
+        "\\appdata\\",
+        "\\users\\public\\",
+    ];
     let hit = risky.iter().find(|p| lower.contains(**p));
     match hit {
         Some(p) => Finding {
@@ -206,11 +211,7 @@ fn applocker() -> Finding {
             ));
         }
     }
-    let svc = read_dword(
-        &root,
-        "SYSTEM\\CurrentControlSet\\Services\\AppID",
-        "Start",
-    );
+    let svc = read_dword(&root, "SYSTEM\\CurrentControlSet\\Services\\AppID", "Start");
     let svc_txt = match svc {
         Some(2) => "AppIDSvc=automatic",
         Some(3) => "AppIDSvc=manual",
@@ -228,7 +229,11 @@ fn applocker() -> Finding {
     let enforcing = modes.iter().any(|m| m.ends_with("enforce"));
     Finding {
         area: "applocker",
-        verdict: if enforcing { Verdict::Warn } else { Verdict::Note },
+        verdict: if enforcing {
+            Verdict::Warn
+        } else {
+            Verdict::Note
+        },
         detail: format!(
             "AppLocker policy present: {} ({svc_txt}). {}",
             modes.join(", "),
@@ -419,14 +424,21 @@ fn integrity_label() -> &'static str {
     let mut len: u32 = 0;
     // SAFETY: probe call - a null buffer with zero length returns the size needed.
     unsafe {
-        GetTokenInformation(t.0, TOKEN_INTEGRITY_LEVEL, std::ptr::null_mut(), 0, &mut len);
+        GetTokenInformation(
+            t.0,
+            TOKEN_INTEGRITY_LEVEL,
+            std::ptr::null_mut(),
+            0,
+            &mut len,
+        );
     }
     if len == 0 {
         return "integrity unknown";
     }
     let mut buf = vec![0u8; len as usize];
     // SAFETY: `buf` has `len` writable bytes, the size the probe asked for.
-    let ok = unsafe { GetTokenInformation(t.0, TOKEN_INTEGRITY_LEVEL, buf.as_mut_ptr(), len, &mut len) };
+    let ok =
+        unsafe { GetTokenInformation(t.0, TOKEN_INTEGRITY_LEVEL, buf.as_mut_ptr(), len, &mut len) };
     if ok == 0 {
         return "integrity unknown";
     }

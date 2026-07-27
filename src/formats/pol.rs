@@ -128,7 +128,13 @@ fn apply_record(
     if let Some(target) = lower.strip_prefix("**del.") {
         // Preserve the original spelling of the value name.
         let original = &name[name.len() - target.len()..];
-        push_value(blocks, path, ValueName::Named(original.to_string()), RegData::Delete, record);
+        push_value(
+            blocks,
+            path,
+            ValueName::Named(original.to_string()),
+            RegData::Delete,
+            record,
+        );
         return;
     }
 
@@ -146,7 +152,13 @@ fn apply_record(
 
     if lower == "**deletevalues" {
         for v in split_list(data) {
-            push_value(blocks, path.clone(), ValueName::Named(v), RegData::Delete, record);
+            push_value(
+                blocks,
+                path.clone(),
+                ValueName::Named(v),
+                RegData::Delete,
+                record,
+            );
         }
         return;
     }
@@ -155,7 +167,11 @@ fn apply_record(
         for k in split_list(data) {
             let child = RegPath {
                 hive: path.hive,
-                sub: if path.sub.is_empty() { k.clone() } else { format!("{}\\{}", path.sub, k) },
+                sub: if path.sub.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{}\\{}", path.sub, k)
+                },
             };
             let b = block_for(blocks, child, record);
             b.delete = true;
@@ -169,7 +185,13 @@ fn apply_record(
             "record {record}: **soft.{original} means \"write only if absent\"; \
              applied unconditionally because .reg has no equivalent"
         ));
-        push_value(blocks, path, ValueName::Named(original.to_string()), decode(ty, data), record);
+        push_value(
+            blocks,
+            path,
+            ValueName::Named(original.to_string()),
+            decode(ty, data),
+            record,
+        );
         return;
     }
 
@@ -182,7 +204,13 @@ fn apply_record(
         return;
     }
 
-    push_value(blocks, path, crate::formats::value_name(name), decode(ty, data), record);
+    push_value(
+        blocks,
+        path,
+        crate::formats::value_name(name),
+        decode(ty, data),
+        record,
+    );
 }
 
 /// Directive payloads are a UTF-16LE, `;`-separated, NUL-terminated list.
@@ -206,10 +234,16 @@ fn decode(ty: u32, data: &[u8]) -> RegData {
             if !s.contains('\0') && !s.chars().any(|c| (c as u32) < 0x20) {
                 RegData::Sz(s)
             } else {
-                RegData::Hex { ty, bytes: data.to_vec() }
+                RegData::Hex {
+                    ty,
+                    bytes: data.to_vec(),
+                }
             }
         }
-        _ => RegData::Hex { ty, bytes: data.to_vec() },
+        _ => RegData::Hex {
+            ty,
+            bytes: data.to_vec(),
+        },
     }
 }
 
@@ -222,16 +256,27 @@ fn utf16(data: &[u8]) -> String {
     String::from_utf16_lossy(&units[..end])
 }
 
-fn block_for<'a>(blocks: &'a mut Vec<KeyBlock>, path: RegPath, line: usize) -> &'a mut KeyBlock {
+fn block_for(blocks: &mut Vec<KeyBlock>, path: RegPath, line: usize) -> &mut KeyBlock {
     let fold = path.fold();
     if let Some(idx) = blocks.iter().position(|b| b.path.fold() == fold) {
         return &mut blocks[idx];
     }
-    blocks.push(KeyBlock { path, delete: false, values: Vec::new(), line });
+    blocks.push(KeyBlock {
+        path,
+        delete: false,
+        values: Vec::new(),
+        line,
+    });
     blocks.last_mut().unwrap()
 }
 
-fn push_value(blocks: &mut Vec<KeyBlock>, path: RegPath, name: ValueName, data: RegData, line: usize) {
+fn push_value(
+    blocks: &mut Vec<KeyBlock>,
+    path: RegPath,
+    name: ValueName,
+    data: RegData,
+    line: usize,
+) {
     block_for(blocks, path, line)
         .values
         .push(ValueEntry { name, data, line });
@@ -258,7 +303,9 @@ impl<'a> Cursor<'a> {
 
     fn expect(&mut self, ch: char, record: usize) -> Result<(), String> {
         if self.i + 2 > self.b.len() {
-            return Err(format!("record {record}: file ends where {ch:?} was expected"));
+            return Err(format!(
+                "record {record}: file ends where {ch:?} was expected"
+            ));
         }
         let got = u16::from_le_bytes([self.b[self.i], self.b[self.i + 1]]);
         if got != ch as u16 {
@@ -289,7 +336,9 @@ impl<'a> Cursor<'a> {
 
     fn u32(&mut self, record: usize, what: &str) -> Result<u32, String> {
         if self.i + 4 > self.b.len() {
-            return Err(format!("record {record}: file ends inside the {what} field"));
+            return Err(format!(
+                "record {record}: file ends inside the {what} field"
+            ));
         }
         let v = u32::from_le_bytes([
             self.b[self.i],
@@ -352,14 +401,30 @@ mod tests {
     #[test]
     fn reads_dword_and_string_records() {
         let bytes = pol(&[
-            record("Software\\Policies\\Acme", "Enabled", REG_DWORD, &1u32.to_le_bytes()),
-            record("Software\\Policies\\Acme", "Server", REG_SZ, &w("https://acme.test")),
+            record(
+                "Software\\Policies\\Acme",
+                "Enabled",
+                REG_DWORD,
+                &1u32.to_le_bytes(),
+            ),
+            record(
+                "Software\\Policies\\Acme",
+                "Server",
+                REG_SZ,
+                &w("https://acme.test"),
+            ),
         ]);
         let (blocks, notes) = read(&bytes, Hive::Hklm, None).unwrap();
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].path.to_string(), "HKEY_LOCAL_MACHINE\\Software\\Policies\\Acme");
+        assert_eq!(
+            blocks[0].path.to_string(),
+            "HKEY_LOCAL_MACHINE\\Software\\Policies\\Acme"
+        );
         assert_eq!(blocks[0].values[0].data, RegData::Dword(1));
-        assert_eq!(blocks[0].values[1].data, RegData::Sz("https://acme.test".into()));
+        assert_eq!(
+            blocks[0].values[1].data,
+            RegData::Sz("https://acme.test".into())
+        );
         assert!(notes[0].starts_with("2 policy record"));
     }
 
@@ -373,7 +438,12 @@ mod tests {
 
     #[test]
     fn delete_values_list_expands() {
-        let bytes = pol(&[record("Software\\Acme", "**DeleteValues", REG_SZ, &w("A;B;C"))]);
+        let bytes = pol(&[record(
+            "Software\\Acme",
+            "**DeleteValues",
+            REG_SZ,
+            &w("A;B;C"),
+        )]);
         let (blocks, _) = read(&bytes, Hive::Hkcu, None).unwrap();
         assert_eq!(blocks[0].values.len(), 3);
         assert!(blocks[0].values.iter().all(|v| v.data == RegData::Delete));
@@ -381,7 +451,12 @@ mod tests {
 
     #[test]
     fn delete_keys_list_makes_child_delete_blocks() {
-        let bytes = pol(&[record("Software\\Acme", "**DeleteKeys", REG_SZ, &w("Old;Older"))]);
+        let bytes = pol(&[record(
+            "Software\\Acme",
+            "**DeleteKeys",
+            REG_SZ,
+            &w("Old;Older"),
+        )]);
         let (blocks, _) = read(&bytes, Hive::Hkcu, None).unwrap();
         assert_eq!(blocks.len(), 2);
         assert!(blocks.iter().all(|b| b.delete));
@@ -390,10 +465,19 @@ mod tests {
 
     #[test]
     fn root_is_inferred_from_the_policy_directory() {
-        let bytes = pol(&[record("Software\\Acme", "X", REG_DWORD, &0u32.to_le_bytes())]);
+        let bytes = pol(&[record(
+            "Software\\Acme",
+            "X",
+            REG_DWORD,
+            &0u32.to_le_bytes(),
+        )]);
         let p = Path::new(r"C:\Windows\System32\GroupPolicy\User\Registry.pol");
         let (blocks, notes) = read(&bytes, Hive::Hklm, Some(p)).unwrap();
-        assert_eq!(blocks[0].path.hive, Hive::Hkcu, "User\\ should override the fallback");
+        assert_eq!(
+            blocks[0].path.hive,
+            Hive::Hkcu,
+            "User\\ should override the fallback"
+        );
         assert!(notes.iter().any(|n| n.contains("User policy directory")));
     }
 

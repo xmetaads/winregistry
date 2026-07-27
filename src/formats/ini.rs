@@ -58,7 +58,9 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
         };
 
         let Some((lhs, rhs)) = line.split_once('=') else {
-            return Err(format!("line {line_no}: expected NAME = VALUE, found {line:?}"));
+            return Err(format!(
+                "line {line_no}: expected NAME = VALUE, found {line:?}"
+            ));
         };
 
         // Strip an unquoted trailing comment, then unwrap surrounding quotes.
@@ -149,14 +151,24 @@ Legacy =
         assert_eq!(val(acme, "Port"), RegData::Dword(8080));
         assert_eq!(val(acme, "Path").type_id(), Some(REG_EXPAND_SZ));
         assert_eq!(val(acme, "Recent").type_id(), Some(REG_MULTI_SZ));
-        assert_eq!(val(acme, "Blob"), RegData::Hex { ty: REG_BINARY, bytes: vec![1, 2, 255] });
+        assert_eq!(
+            val(acme, "Blob"),
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes: vec![1, 2, 255]
+            }
+        );
         assert_eq!(val(acme, "Legacy"), RegData::Delete, "empty value deletes");
     }
 
     #[test]
     fn at_sign_is_the_default_value() {
         let (blocks, _) = read(SAMPLE.as_bytes()).unwrap();
-        let d = blocks[0].values.iter().find(|v| v.name == ValueName::Default).unwrap();
+        let d = blocks[0]
+            .values
+            .iter()
+            .find(|v| v.name == ValueName::Default)
+            .unwrap();
         assert_eq!(d.data, RegData::Sz("default value".into()));
     }
 
@@ -170,15 +182,23 @@ Legacy =
     #[test]
     fn multi_sz_uses_pipe_separators() {
         let (blocks, _) = read(SAMPLE.as_bytes()).unwrap();
-        let RegData::Hex { bytes, .. } = val(&blocks[0], "Recent") else { panic!() };
-        assert_eq!(crate::model::utf16_from_bytes(&bytes), vec!["a.txt", "b.txt"]);
+        let RegData::Hex { bytes, .. } = val(&blocks[0], "Recent") else {
+            panic!()
+        };
+        assert_eq!(
+            crate::model::utf16_from_bytes(&bytes),
+            vec!["a.txt", "b.txt"]
+        );
     }
 
     #[test]
     fn a_path_with_a_colon_is_not_mistaken_for_a_type() {
         let src = "[HKCU\\Software\\A]\nC:\\Tools = x\n";
         let (blocks, _) = read(src.as_bytes()).unwrap();
-        assert_eq!(blocks[0].values[0].name, ValueName::Named("C:\\Tools".into()));
+        assert_eq!(
+            blocks[0].values[0].name,
+            ValueName::Named("C:\\Tools".into())
+        );
     }
 
     #[test]

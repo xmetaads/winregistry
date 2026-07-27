@@ -30,7 +30,10 @@ pub struct FixReport {
 
 impl FixReport {
     pub fn lossy_count(&self) -> usize {
-        self.fixes.iter().filter(|f| f.class == Class::Lossy).count()
+        self.fixes
+            .iter()
+            .filter(|f| f.class == Class::Lossy)
+            .count()
     }
 }
 

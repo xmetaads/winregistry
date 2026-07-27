@@ -224,16 +224,29 @@ pub enum Command {
         out: Option<PathBuf>,
     },
 
-    /// Compare two .reg files, or a .reg file against the live registry.
+    /// Compare two sources of registry data and emit the patch between them.
+    ///
+    /// Each side is either a file in any supported format or a live registry
+    /// key path, so file-vs-file, file-vs-live and live-vs-live all work.
+    /// The patch turns A into B: a drift report is also the fix.
     Diff {
+        /// Baseline: a file, or a key like HKCU\Software\Acme.
         #[arg(value_name = "A")]
         a: String,
+        /// Comparison target, same forms as A.
         #[arg(value_name = "B")]
         b: String,
 
+        #[command(flatten)]
+        input: InputOpts,
+
         /// Write the difference as an applicable .reg patch.
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, short = 'o', value_name = "FILE")]
         out: Option<PathBuf>,
+
+        /// Exit 5 when the two sides differ, for use as a drift gate.
+        #[arg(long)]
+        exit_code: bool,
     },
 
     /// Read values from the live registry.

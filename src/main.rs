@@ -1,5 +1,6 @@
 mod cli;
 mod coalesce;
+mod diff;
 mod discover;
 mod encoding;
 mod engine;
@@ -30,13 +31,36 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use winreg::View;
 
+/// An input file that could not be read as registry data.
+///
+/// Carried through `anyhow` so `main` can recover the documented exit code.
+/// Without this, every reader failure collapsed into the generic IO path and a
+/// malformed `.reg` reported 7 instead of the 3 the contract promises — the
+/// integration suite exists to catch exactly that.
+#[derive(Debug)]
+struct InputError {
+    source: String,
+    message: String,
+    code: i32,
+}
+
+impl std::fmt::Display for InputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.source, self.message)
+    }
+}
+
+impl std::error::Error for InputError {}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let code = match run(&cli) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("regx: {e:#}");
-            exit::IO
+            e.downcast_ref::<InputError>()
+                .map(|i| i.code)
+                .unwrap_or(exit::IO)
         }
     };
     ExitCode::from(code as u8)
@@ -77,7 +101,15 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             redirect,
             backup,
             no_backup,
-        } => cmd_import(cli, files, input, redirect, backup.as_deref(), *no_backup, false),
+        } => cmd_import(
+            cli,
+            files,
+            input,
+            redirect,
+            backup.as_deref(),
+            *no_backup,
+            false,
+        ),
         Command::Sync {
             file,
             input,
@@ -100,7 +132,14 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             registry_pointer,
             verbose,
             strict,
-        } => cmd_discover(cli, target.as_deref(), *policy, *registry_pointer, *verbose, *strict),
+        } => cmd_discover(
+            cli,
+            target.as_deref(),
+            *policy,
+            *registry_pointer,
+            *verbose,
+            *strict,
+        ),
         Command::Export {
             key,
             out,
@@ -131,10 +170,13 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             create,
             exclusive,
         } => cmd_hive(cli, file, op, *create, *exclusive),
-        Command::Diff { .. } => {
-            eprintln!("regx: `diff` is not implemented yet.");
-            Ok(exit::USAGE)
-        }
+        Command::Diff {
+            a,
+            b,
+            input,
+            out,
+            exit_code,
+        } => cmd_diff(cli, a, b, input, out.as_deref(), *exit_code),
     }
 }
 
@@ -163,7 +205,10 @@ fn read_options(o: &cli::InputOpts) -> anyhow::Result<formats::ReadOptions> {
     }
     opts.inf_section = o.inf_section.clone();
     opts.admx_state = formats::admx::State::parse(&o.admx_state).ok_or_else(|| {
-        anyhow!("--admx-state {:?} is not 'enabled' or 'disabled'", o.admx_state)
+        anyhow!(
+            "--admx-state {:?} is not 'enabled' or 'disabled'",
+            o.admx_state
+        )
     })?;
     opts.admx_policy = o.admx_policy.clone();
     Ok(opts)
@@ -174,22 +219,34 @@ fn read_options(o: &cli::InputOpts) -> anyhow::Result<formats::ReadOptions> {
 fn read_any(cli: &Cli, path: &Path, o: &cli::InputOpts) -> anyhow::Result<formats::ReadOutcome> {
     let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
 
-    let forced = match &o.from {
-        Some(name) => Some(formats::Format::parse_name(name).ok_or_else(|| {
-            anyhow!("--from {name:?} is not a known format; run `regx formats`")
-        })?),
-        None => None,
-    };
+    let forced =
+        match &o.from {
+            Some(name) => Some(formats::Format::parse_name(name).ok_or_else(|| {
+                anyhow!("--from {name:?} is not a known format; run `regx formats`")
+            })?),
+            None => None,
+        };
 
-    let outcome = formats::read(&bytes, Some(path), forced, &read_options(o)?)
-        .map_err(|e| anyhow!("{}: {e}", path.display()))?;
+    let outcome = formats::read(&bytes, Some(path), forced, &read_options(o)?).map_err(|e| {
+        anyhow!(InputError {
+            source: path.display().to_string(),
+            message: e,
+            // Every reader failure means "this input could not be parsed as
+            // registry data", which is exit code 3 by the documented contract.
+            code: exit::PARSE,
+        })
+    })?;
 
     if cli.global.log_level >= LogLevel::Info {
         eprintln!(
             "regx: {} read as {}{}",
             path.display(),
             outcome.format,
-            if forced.is_some() { " (forced)" } else { " (detected)" }
+            if forced.is_some() {
+                " (forced)"
+            } else {
+                " (detected)"
+            }
         );
         for n in &outcome.notes {
             eprintln!("  note: {n}");
@@ -211,7 +268,12 @@ fn report_diagnostics(path: &Path, outcome: &ParseOutcome, level: LogLevel) {
     }
 }
 
-fn write_reg(path: &Path, file: &RegFile, root_as: Option<&str>, banner: &[String]) -> anyhow::Result<()> {
+fn write_reg(
+    path: &Path,
+    file: &RegFile,
+    root_as: Option<&str>,
+    banner: &[String],
+) -> anyhow::Result<()> {
     let text = writer::to_string_rooted(file, root_as, banner);
     let bytes = match file.format {
         RegFormat::V5 => encoding::encode_utf16le_bom(&text),
@@ -261,11 +323,7 @@ struct RedirectOutcome {
     refused: usize,
 }
 
-fn apply_redirect(
-    file: &mut RegFile,
-    opts: &RedirectOpts,
-    level: LogLevel,
-) -> RedirectOutcome {
+fn apply_redirect(file: &mut RegFile, opts: &RedirectOpts, level: LogLevel) -> RedirectOutcome {
     let policy = match opts.redirect {
         RedirectMode::Off => Policy::Off,
         RedirectMode::ClassesOnly => Policy::ClassesOnly,
@@ -323,7 +381,7 @@ fn apply_redirect(
     let (merged, report) = coalesce::coalesce(kept);
     for c in &report.conflicts {
         eprintln!(
-            "  conflict {}\\\\{}: line {} {:?} overridden by line {} {:?}",
+            "  conflict {}\\{}: line {} {:?} overridden by line {} {:?}",
             c.path, c.value, c.first_line, c.old, c.last_line, c.new
         );
     }
@@ -356,7 +414,8 @@ fn cmd_validate(
     let mut worst = exit::OK;
 
     for path in files {
-        let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
         let (text, _) = {
             let o = encoding::decode(&bytes);
             (o.0, o.1)
@@ -400,7 +459,11 @@ fn cmd_validate(
         for x in raw_fixes.iter().chain(report.fixes.iter()) {
             println!(
                 "  fix{} line {}: {}",
-                if x.class == fix::Class::Lossy { " (lossy)" } else { "" },
+                if x.class == fix::Class::Lossy {
+                    " (lossy)"
+                } else {
+                    ""
+                },
                 x.line,
                 x.what
             );
@@ -425,7 +488,9 @@ fn cmd_validate(
         if keep_backup && dest == path.as_path() {
             let bak = path.with_extension(format!(
                 "{}.bak",
-                path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default()
+                path.extension()
+                    .map(|e| e.to_string_lossy().into_owned())
+                    .unwrap_or_default()
             ));
             std::fs::copy(path, &bak)
                 .with_context(|| format!("cannot write backup {}", bak.display()))?;
@@ -463,7 +528,10 @@ fn cmd_convert(
     let r = apply_redirect(&mut file, ropts, cli.global.log_level);
 
     if r.refused > 0 && ropts.on_refuse == OnRefuse::Fail {
-        eprintln!("regx: {} key(s) could not be redirected (--on-refuse fail)", r.refused);
+        eprintln!(
+            "regx: {} key(s) could not be redirected (--on-refuse fail)",
+            r.refused
+        );
         return Ok(exit::REDIRECT_REFUSED);
     }
 
@@ -480,7 +548,11 @@ fn cmd_convert(
         }
         _ => print!("{}", writer::to_string(&file)),
     }
-    Ok(if r.skipped > 0 { exit::PARTIAL } else { exit::OK })
+    Ok(if r.skipped > 0 {
+        exit::PARTIAL
+    } else {
+        exit::OK
+    })
 }
 
 fn cmd_merge(cli: &Cli, files: &[PathBuf], out: Option<&Path>) -> anyhow::Result<i32> {
@@ -501,7 +573,7 @@ fn cmd_merge(cli: &Cli, files: &[PathBuf], out: Option<&Path>) -> anyhow::Result
     let (keys, report) = coalesce::coalesce(all);
     for c in &report.conflicts {
         eprintln!(
-            "  conflict {}\\\\{}: {:?} overridden by {:?}",
+            "  conflict {}\\{}: {:?} overridden by {:?}",
             c.path, c.value, c.old, c.new
         );
     }
@@ -553,7 +625,11 @@ fn cmd_import(
     }
     if file.keys.is_empty() {
         eprintln!("regx: nothing left to apply");
-        return Ok(if r.refused > 0 { exit::REDIRECT_REFUSED } else { exit::OK });
+        return Ok(if r.refused > 0 {
+            exit::REDIRECT_REFUSED
+        } else {
+            exit::OK
+        });
     }
 
     let roots = Roots::live();
@@ -604,7 +680,11 @@ fn cmd_import(
     print_apply(cli, &rep);
 
     Ok(if !rep.failures.is_empty() {
-        if rep.touched() > 0 { exit::PARTIAL } else { exit::ACCESS_DENIED }
+        if rep.touched() > 0 {
+            exit::PARTIAL
+        } else {
+            exit::ACCESS_DENIED
+        }
     } else if r.skipped > 0 {
         exit::PARTIAL
     } else {
@@ -700,7 +780,11 @@ fn cmd_export(
         }
         _ => print!("{}", writer::to_string(&file)),
     }
-    Ok(if report.skipped.is_empty() { exit::OK } else { exit::PARTIAL })
+    Ok(if report.skipped.is_empty() {
+        exit::OK
+    } else {
+        exit::PARTIAL
+    })
 }
 
 fn cmd_query(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> anyhow::Result<i32> {
@@ -744,19 +828,31 @@ fn print_query(
                     continue;
                 }
             }
-            println!("    {:<28} {:<14} {}", v.name.to_string(), v.data.type_name(), v.data.preview());
+            println!(
+                "    {:<28} {:<14} {}",
+                v.name.to_string(),
+                v.data.type_name(),
+                v.data.preview()
+            );
         }
     }
     for (p, e) in &report.skipped {
         eprintln!("  skipped {p}: {e}");
     }
-    Ok(if report.skipped.is_empty() { exit::OK } else { exit::PARTIAL })
+    Ok(if report.skipped.is_empty() {
+        exit::OK
+    } else {
+        exit::PARTIAL
+    })
 }
 
 fn json_of(keys: &[KeyBlock], label: &dyn Fn(&RegPath) -> String) -> String {
     let mut s = String::from("[\n");
     for (i, b) in keys.iter().enumerate() {
-        s.push_str(&format!("  {{\"key\": {}, \"values\": [", jstr(&label(&b.path))));
+        s.push_str(&format!(
+            "  {{\"key\": {}, \"values\": [",
+            jstr(&label(&b.path))
+        ));
         for (j, v) in b.values.iter().enumerate() {
             if j > 0 {
                 s.push_str(", ");
@@ -832,7 +928,11 @@ fn cmd_set(
     let roots = Roots::live();
     let rep = engine::apply(&roots, &file, view_of(&cli.global), cli.global.dry_run);
     print_apply(cli, &rep);
-    Ok(if rep.failures.is_empty() { exit::OK } else { exit::ACCESS_DENIED })
+    Ok(if rep.failures.is_empty() {
+        exit::OK
+    } else {
+        exit::ACCESS_DENIED
+    })
 }
 
 fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> anyhow::Result<i32> {
@@ -880,7 +980,11 @@ fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> any
     let roots = Roots::live();
     let rep = engine::apply(&roots, &file, view_of(&cli.global), cli.global.dry_run);
     print_apply(cli, &rep);
-    Ok(if rep.failures.is_empty() { exit::OK } else { exit::ACCESS_DENIED })
+    Ok(if rep.failures.is_empty() {
+        exit::OK
+    } else {
+        exit::ACCESS_DENIED
+    })
 }
 
 fn cmd_probe(cli: &Cli, key: &str) -> anyhow::Result<i32> {
@@ -903,7 +1007,11 @@ fn cmd_probe(cli: &Cli, key: &str) -> anyhow::Result<i32> {
             println!("  detail    {}", r.detail);
         }
     }
-    Ok(if r.writable || r.creatable { exit::OK } else { exit::ACCESS_DENIED })
+    Ok(if r.writable || r.creatable {
+        exit::OK
+    } else {
+        exit::ACCESS_DENIED
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -921,7 +1029,14 @@ fn cmd_hive(
         let i = hive::info(file);
         println!("{}", i.path.display());
         println!("  size        {} bytes", i.size);
-        println!("  hive header {}", if i.signature_ok { "regf (valid)" } else { "MISSING" });
+        println!(
+            "  hive header {}",
+            if i.signature_ok {
+                "regf (valid)"
+            } else {
+                "MISSING"
+            }
+        );
         println!("  mountable   read={} write={}", i.readable, i.writable);
         if !i.detail.is_empty() {
             println!("  detail      {}", i.detail);
@@ -962,11 +1077,19 @@ fn cmd_hive(
         _ => Vec::new(),
     };
 
-    let keep_going = matches!(op, HiveOp::Exec { keep_going: true, .. });
+    let keep_going = matches!(
+        op,
+        HiveOp::Exec {
+            keep_going: true,
+            ..
+        }
+    );
     let mut worst = exit::OK;
 
     if ops.is_empty() && matches!(op, HiveOp::Exec { .. }) {
-        return Err(anyhow!("`hive exec` needs at least one -c OP or --script FILE"));
+        return Err(anyhow!(
+            "`hive exec` needs at least one -c OP or --script FILE"
+        ));
     }
 
     if ops.is_empty() {
@@ -1058,7 +1181,14 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
                 }
             };
             for b in &keys {
-                println!("{}", if b.path.sub.is_empty() { "\\" } else { &b.path.sub });
+                println!(
+                    "{}",
+                    if b.path.sub.is_empty() {
+                        "\\"
+                    } else {
+                        &b.path.sub
+                    }
+                );
             }
             for (p, e) in &rep.skipped {
                 eprintln!("  skipped {p}: {e}");
@@ -1106,7 +1236,11 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
             };
             let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
             print_apply(cli, &rep);
-            Ok(if rep.failures.is_empty() { exit::OK } else { exit::ACCESS_DENIED })
+            Ok(if rep.failures.is_empty() {
+                exit::OK
+            } else {
+                exit::ACCESS_DENIED
+            })
         }
 
         HiveOp::Delete {
@@ -1148,7 +1282,11 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
             };
             let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
             print_apply(cli, &rep);
-            Ok(if rep.failures.is_empty() { exit::OK } else { exit::ACCESS_DENIED })
+            Ok(if rep.failures.is_empty() {
+                exit::OK
+            } else {
+                exit::ACCESS_DENIED
+            })
         }
 
         HiveOp::Import { input, strip_root } => {
@@ -1174,7 +1312,11 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
             file.keys = keys;
             let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
             print_apply(cli, &rep);
-            Ok(if rep.failures.is_empty() { exit::OK } else { exit::PARTIAL })
+            Ok(if rep.failures.is_empty() {
+                exit::OK
+            } else {
+                exit::PARTIAL
+            })
         }
 
         HiveOp::Export {
@@ -1251,15 +1393,51 @@ fn split_argv(s: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 const FORMAT_TABLE: &[(&str, &str, &str)] = &[
-    ("reg",  ".reg",          "regedit's own text format, UTF-16 or ANSI REGEDIT4"),
-    ("pol",  "Registry.pol",  "Group Policy PReg binary; **del./**DeleteValues directives honoured"),
-    ("admx", ".admx + .adml", "policy template; concrete enabled/disabled values, elements reported"),
-    ("gpp",  "Registry.xml",  "Group Policy Preferences; actions C/R/U/D, Collections traversed"),
-    ("inf",  ".inf",          "[AddReg]/[DelReg] sections, with [Strings] token substitution"),
-    ("json", ".json",         "compact {path: {name: value}} or explicit {\"keys\": [...]}"),
-    ("csv",  ".csv / .tsv",   "header row naming key, name, type, data in any order"),
-    ("ini",  ".ini / .cfg",   "[HKEY_...] sections, optional :type suffix on each name"),
-    ("hive", "NTUSER.DAT",    "not read here - use `regx hive <FILE>`"),
+    (
+        "reg",
+        ".reg",
+        "regedit's own text format, UTF-16 or ANSI REGEDIT4",
+    ),
+    (
+        "pol",
+        "Registry.pol",
+        "Group Policy PReg binary; **del./**DeleteValues directives honoured",
+    ),
+    (
+        "admx",
+        ".admx + .adml",
+        "policy template; concrete enabled/disabled values, elements reported",
+    ),
+    (
+        "gpp",
+        "Registry.xml",
+        "Group Policy Preferences; actions C/R/U/D, Collections traversed",
+    ),
+    (
+        "inf",
+        ".inf",
+        "[AddReg]/[DelReg] sections, with [Strings] token substitution",
+    ),
+    (
+        "json",
+        ".json",
+        "compact {path: {name: value}} or explicit {\"keys\": [...]}",
+    ),
+    (
+        "csv",
+        ".csv / .tsv",
+        "header row naming key, name, type, data in any order",
+    ),
+    (
+        "ini",
+        ".ini / .cfg",
+        "[HKEY_...] sections, optional :type suffix on each name",
+    ),
+    (
+        "hive",
+        "NTUSER.DAT",
+        "not read here - use `regx hive <FILE>`",
+    ),
 ];
 
 fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
@@ -1269,7 +1447,9 @@ fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
             .map(|(n, ext, d)| {
                 format!(
                     "  {{\"format\": {}, \"typical\": {}, \"notes\": {}}}",
-                    jstr(n), jstr(ext), jstr(d)
+                    jstr(n),
+                    jstr(ext),
+                    jstr(d)
                 )
             })
             .collect();
@@ -1287,6 +1467,146 @@ fn cmd_formats(cli: &Cli) -> anyhow::Result<i32> {
          User\\ path component, or set with --pol-root."
     );
     Ok(exit::OK)
+}
+
+/// One side of a `diff`: a file in any supported format, or a live key.
+///
+/// A string that parses as a registry path is treated as live. That is
+/// unambiguous in practice — `HKCU\...` is not a legal relative file name — and
+/// it means the same argument position accepts either kind.
+fn diff_side(cli: &Cli, spec: &str, iopts: &cli::InputOpts) -> anyhow::Result<Vec<KeyBlock>> {
+    if let Some(path) = RegPath::parse(spec) {
+        let roots = Roots::live();
+        let (blocks, report) = engine::export(&roots, &path, view_of(&cli.global), true)
+            .map_err(|e| anyhow!("{spec}: {e}"))?;
+        for (p, e) in &report.skipped {
+            eprintln!("  skipped {p}: {e}");
+        }
+        if !report.skipped.is_empty() {
+            eprintln!(
+                "regx: {} subkey(s) of {spec} were unreadable; the comparison is incomplete",
+                report.skipped.len()
+            );
+        }
+        return Ok(blocks);
+    }
+
+    let file = Path::new(spec);
+    if !file.exists() {
+        return Err(anyhow!(
+            "{spec:?} is neither an existing file nor a registry path starting with a known root"
+        ));
+    }
+    Ok(read_any(cli, file, iopts)?.file.keys)
+}
+
+fn cmd_diff(
+    cli: &Cli,
+    a: &str,
+    b: &str,
+    iopts: &cli::InputOpts,
+    out: Option<&Path>,
+    exit_code: bool,
+) -> anyhow::Result<i32> {
+    let left = diff_side(cli, a, iopts)?;
+    let right = diff_side(cli, b, iopts)?;
+    let d = diff::compare(&left, &right);
+    let (added, modified, removed) = d.counts();
+
+    if cli.global.output == OutputFormat::Json {
+        let mut items: Vec<String> = d
+            .keys
+            .iter()
+            .map(|k| {
+                format!(
+                    "    {{\"kind\": \"key\", \"change\": {}, \"path\": {}}}",
+                    jstr(&format!("{:?}", k.change).to_lowercase()),
+                    jstr(&k.path.to_string())
+                )
+            })
+            .collect();
+        items.extend(d.values.iter().map(|v| {
+            format!(
+                "    {{\"kind\": \"value\", \"change\": {}, \"path\": {}, \"name\": {}, \
+                 \"left\": {}, \"right\": {}}}",
+                jstr(&format!("{:?}", v.change).to_lowercase()),
+                jstr(&v.path.to_string()),
+                jstr(&v.name.to_string()),
+                v.left
+                    .as_ref()
+                    .map(|x| jstr(&x.preview()))
+                    .unwrap_or_else(|| "null".into()),
+                v.right
+                    .as_ref()
+                    .map(|x| jstr(&x.preview()))
+                    .unwrap_or_else(|| "null".into()),
+            )
+        }));
+        println!(
+            "{{\n  \"a\": {},\n  \"b\": {},\n  \"added\": {added}, \"modified\": {modified}, \
+             \"removed\": {removed},\n  \"changes\": [\n{}\n  ]\n}}",
+            jstr(a),
+            jstr(b),
+            items.join(",\n")
+        );
+    } else if d.is_empty() {
+        println!("No differences.");
+    } else {
+        println!("--- {a}\n+++ {b}\n");
+        for k in &d.keys {
+            println!("{} [{}]", k.change.sigil(), k.path);
+        }
+        for v in &d.values {
+            match v.change {
+                diff::Change::Modified => {
+                    println!("{} {}\\{}", v.change.sigil(), v.path, v.name);
+                    println!(
+                        "    - {}",
+                        v.left.as_ref().map(|x| x.preview()).unwrap_or_default()
+                    );
+                    println!(
+                        "    + {}",
+                        v.right.as_ref().map(|x| x.preview()).unwrap_or_default()
+                    );
+                }
+                _ => {
+                    let shown = v.right.as_ref().or(v.left.as_ref());
+                    println!(
+                        "{} {}\\{} = {}",
+                        v.change.sigil(),
+                        v.path,
+                        v.name,
+                        shown.map(|x| x.preview()).unwrap_or_default()
+                    );
+                }
+            }
+        }
+        println!("\n{added} added, {modified} modified, {removed} removed");
+    }
+
+    if let Some(p) = out {
+        if cli.global.dry_run {
+            eprintln!("regx: --dry-run, patch not written");
+        } else {
+            let patch = d.to_patch();
+            let banner = vec![
+                format!("regx diff patch: applying this to {a} produces {b}"),
+                format!("{added} added, {modified} modified, {removed} removed"),
+            ];
+            write_reg(p, &patch, None, &banner)?;
+            eprintln!(
+                "regx: patch -> {} ({} key block(s))",
+                p.display(),
+                patch.keys.len()
+            );
+        }
+    }
+
+    Ok(if exit_code && !d.is_empty() {
+        exit::PARTIAL
+    } else {
+        exit::OK
+    })
 }
 
 fn cmd_discover(
@@ -1314,11 +1634,7 @@ fn cmd_discover(
             .found
             .iter()
             .map(|f| {
-                let risks: Vec<String> = f
-                    .risks
-                    .iter()
-                    .map(|x| jstr(&format!("{x:?}")))
-                    .collect();
+                let risks: Vec<String> = f.risks.iter().map(|x| jstr(&format!("{x:?}"))).collect();
                 format!(
                     "    {{\"path\": {}, \"origin\": {}, \"rank\": {}, \"format\": {}, \
                      \"size\": {}, \"risks\": [{}]}}",
@@ -1340,7 +1656,11 @@ fn cmd_discover(
             jstr(&r.stem),
             items.join(",\n")
         );
-        return Ok(if strict && r.risky() > 0 { exit::PARTIAL } else { exit::OK });
+        return Ok(if strict && r.risky() > 0 {
+            exit::PARTIAL
+        } else {
+            exit::OK
+        });
     }
 
     if let Some(exe) = &r.exe {
@@ -1390,7 +1710,11 @@ fn cmd_discover(
         );
     }
 
-    Ok(if strict && risky > 0 { exit::PARTIAL } else { exit::OK })
+    Ok(if strict && risky > 0 {
+        exit::PARTIAL
+    } else {
+        exit::OK
+    })
 }
 
 fn cmd_inspect(cli: &Cli, files: &[PathBuf], iopts: &cli::InputOpts) -> anyhow::Result<i32> {
@@ -1427,14 +1751,22 @@ fn cmd_inspect(cli: &Cli, files: &[PathBuf], iopts: &cli::InputOpts) -> anyhow::
                 values,
                 deletes,
                 hives.iter().map(|h| jstr(h)).collect::<Vec<_>>().join(", "),
-                outcome.notes.iter().map(|n| jstr(n)).collect::<Vec<_>>().join(", "),
+                outcome
+                    .notes
+                    .iter()
+                    .map(|n| jstr(n))
+                    .collect::<Vec<_>>()
+                    .join(", "),
             );
             continue;
         }
 
         println!("{}", path.display());
         println!("  format      {}", outcome.format);
-        println!("  key blocks  {} ({deletes} whole-key delete(s))", outcome.file.keys.len());
+        println!(
+            "  key blocks  {} ({deletes} whole-key delete(s))",
+            outcome.file.keys.len()
+        );
         println!("  values      {values}");
         println!("  hives       {}", hives.join(", "));
         for n in &outcome.notes {

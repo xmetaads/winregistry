@@ -12,7 +12,10 @@
 //!    apply, undo) is written against `&RegKey`, so it works identically on the
 //!    live hives and on a mounted file.
 
-#![allow(non_snake_case)]
+// These names mirror the Win32 SDK exactly so the FFI declarations can be
+// diffed against MSDN. Renaming them to satisfy a style lint would make that
+// harder for no benefit.
+#![allow(non_snake_case, clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
 use std::fmt;
@@ -159,9 +162,7 @@ impl fmt::Display for Error {
         let hint = match self.code {
             ERROR_FILE_NOT_FOUND => "key or value does not exist",
             ERROR_ACCESS_DENIED => "access denied (this build never elevates - see `regx probe`)",
-            ERROR_SHARING_VIOLATION => {
-                "the hive file is already loaded or open in another process"
-            }
+            ERROR_SHARING_VIOLATION => "the hive file is already loaded or open in another process",
             ERROR_BADDB => "the file is not a valid registry hive",
             ERROR_INVALID_HANDLE => "invalid handle",
             _ => "",
@@ -169,7 +170,11 @@ impl fmt::Display for Error {
         // Plain display, not `{:?}`: a registry path is full of backslashes and
         // Debug escaping turns every one of them into `\\`.
         if hint.is_empty() {
-            write!(f, "{} failed on {} (error {})", self.op, self.target, self.code)
+            write!(
+                f,
+                "{} failed on {} (error {})",
+                self.op, self.target, self.code
+            )
         } else {
             write!(
                 f,
@@ -244,7 +249,11 @@ impl RegKey {
         let rc = unsafe {
             RegOpenKeyExW(
                 self.h,
-                if sub.is_empty() { std::ptr::null() } else { w.as_ptr() },
+                if sub.is_empty() {
+                    std::ptr::null()
+                } else {
+                    w.as_ptr()
+                },
                 0,
                 sam | view.flag(),
                 &mut out,
@@ -306,16 +315,8 @@ impl RegKey {
         let w = wide(name);
         // SAFETY: `data`'s pointer/length describe the same slice; an empty slice
         // still yields a valid (dangling but unread) pointer because cb is 0.
-        let rc = unsafe {
-            RegSetValueExW(
-                self.h,
-                w.as_ptr(),
-                0,
-                ty,
-                data.as_ptr(),
-                data.len() as u32,
-            )
-        };
+        let rc =
+            unsafe { RegSetValueExW(self.h, w.as_ptr(), 0, ty, data.as_ptr(), data.len() as u32) };
         self.status(rc, "RegSetValueEx", name)
     }
 
@@ -327,7 +328,14 @@ impl RegKey {
         // SAFETY: probe call with a null data pointer is the documented way to
         // learn the required buffer size.
         let rc = unsafe {
-            RegQueryValueExW(self.h, w.as_ptr(), std::ptr::null_mut(), &mut ty, std::ptr::null_mut(), &mut cb)
+            RegQueryValueExW(
+                self.h,
+                w.as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                std::ptr::null_mut(),
+                &mut cb,
+            )
         };
         if rc == ERROR_FILE_NOT_FOUND {
             return Ok(None);
@@ -350,7 +358,11 @@ impl RegKey {
                     w.as_ptr(),
                     std::ptr::null_mut(),
                     &mut ty,
-                    if len == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr() },
+                    if len == 0 {
+                        std::ptr::null_mut()
+                    } else {
+                        buf.as_mut_ptr()
+                    },
                     &mut len,
                 )
             };
@@ -403,7 +415,11 @@ impl RegKey {
         let rc = unsafe {
             RegDeleteTreeW(
                 self.h,
-                if sub.is_empty() { std::ptr::null() } else { w.as_ptr() },
+                if sub.is_empty() {
+                    std::ptr::null()
+                } else {
+                    w.as_ptr()
+                },
             )
         };
         self.status(rc, "RegDeleteTree", sub)
@@ -593,7 +609,9 @@ mod tests {
     fn round_trips_a_value_in_a_scratch_key() {
         let root = RegKey::predefined(hkey_current_user(), "HKEY_CURRENT_USER");
         let path = "Software\\regx-selftest";
-        let (k, _) = root.create(path, KEY_READ | KEY_WRITE, View::Native).unwrap();
+        let (k, _) = root
+            .create(path, KEY_READ | KEY_WRITE, View::Native)
+            .unwrap();
 
         k.set_value("probe", 1, &[0x41, 0x00, 0x00, 0x00]).unwrap(); // "A" as REG_SZ
         let got = k.get_value("probe").unwrap().unwrap();

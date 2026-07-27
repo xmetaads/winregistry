@@ -19,14 +19,16 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
     let rows = parse(&text);
     let mut rows = rows.into_iter();
 
-    let (header_line, header) = rows
-        .next()
-        .ok_or("the file is empty")?;
-    let cols: Vec<String> = header.iter().map(|h| h.trim().to_ascii_lowercase()).collect();
+    let (header_line, header) = rows.next().ok_or("the file is empty")?;
+    let cols: Vec<String> = header
+        .iter()
+        .map(|h| h.trim().to_ascii_lowercase())
+        .collect();
 
     let find = |names: &[&str]| cols.iter().position(|c| names.contains(&c.as_str()));
-    let c_key = find(&["key", "path", "subkey"])
-        .ok_or_else(|| format!("line {header_line}: no 'key' column in the header row {header:?}"))?;
+    let c_key = find(&["key", "path", "subkey"]).ok_or_else(|| {
+        format!("line {header_line}: no 'key' column in the header row {header:?}")
+    })?;
     let c_name = find(&["name", "value", "valuename"]);
     let c_type = find(&["type", "regtype"]);
     let c_data = find(&["data", "value data", "valuedata", "content"]);
@@ -109,7 +111,11 @@ fn merge(blocks: &mut Vec<KeyBlock>, incoming: KeyBlock) {
 fn parse(text: &str) -> Vec<(usize, Vec<String>)> {
     let delim = {
         let first = text.lines().next().unwrap_or("");
-        if first.contains('\t') && !first.contains(',') { '\t' } else { ',' }
+        if first.contains('\t') && !first.contains(',') {
+            '\t'
+        } else {
+            ','
+        }
     };
 
     let mut rows = Vec::new();
@@ -195,7 +201,10 @@ mod tests {
                    \"HKCU\\Software\\A,B\",\"Odd\"\"Name\",REG_SZ,\"x,y\"\n";
         let (blocks, _) = read(src.as_bytes()).unwrap();
         assert_eq!(blocks[0].path.sub, "Software\\A,B");
-        assert_eq!(blocks[0].values[0].name, ValueName::Named("Odd\"Name".into()));
+        assert_eq!(
+            blocks[0].values[0].name,
+            ValueName::Named("Odd\"Name".into())
+        );
         assert_eq!(blocks[0].values[0].data, RegData::Sz("x,y".into()));
     }
 

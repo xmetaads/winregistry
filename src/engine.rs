@@ -126,7 +126,9 @@ pub fn parse_typed(ty: &str, data: &str) -> std::result::Result<RegData, String>
             let mut bytes = Vec::with_capacity(cleaned.len() / 2);
             for pair in cleaned.as_bytes().chunks(2) {
                 let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
-                bytes.push(u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte {s:?}"))?);
+                bytes.push(
+                    u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte {s:?}"))?,
+                );
             }
             Ok(RegData::Hex {
                 ty: if t == "BINARY" { REG_BINARY } else { REG_NONE },
@@ -366,7 +368,7 @@ pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyR
 
         for v in &block.values {
             let name = value_api_name(&v.name);
-            let label = format!("{}\\\\{}", block.path, v.name);
+            let label = format!("{}\\{}", block.path, v.name);
 
             match &v.data {
                 RegData::Delete => {
@@ -481,7 +483,11 @@ pub fn probe(roots: &Roots, path: &RegPath, view: View) -> ProbeResult {
                     res.detail = format!(
                         "nearest existing ancestor: {}\\{cur} ({})",
                         root.label(),
-                        if res.creatable { "writable" } else { "not writable" }
+                        if res.creatable {
+                            "writable"
+                        } else {
+                            "not writable"
+                        }
                     );
                     return res;
                 }
@@ -501,7 +507,10 @@ mod tests {
 
     #[test]
     fn clean_string_rejects_unterminated_and_control_chars() {
-        assert_eq!(clean_string(&[0x41, 0x00, 0x00, 0x00]).as_deref(), Some("A"));
+        assert_eq!(
+            clean_string(&[0x41, 0x00, 0x00, 0x00]).as_deref(),
+            Some("A")
+        );
         assert_eq!(clean_string(&[0x41, 0x00]), None, "missing NUL terminator");
         assert_eq!(clean_string(&[0x41, 0x00, 0x00]), None, "odd length");
         assert_eq!(clean_string(&[0x0a, 0x00, 0x00, 0x00]), None, "newline");

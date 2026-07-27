@@ -1,0 +1,8 @@
+# Pinning the channel makes a build reproducible: everyone who checks this
+# repository out compiles with the same compiler, and CI cannot drift away from
+# what a developer sees locally.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+profile = "minimal"

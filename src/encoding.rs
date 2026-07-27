@@ -107,8 +107,14 @@ fn ansi_to_string(bytes: &[u8]) -> String {
     // SAFETY: pointer/length pairs describe the same slice; the probe call with a
     // null destination is the documented way to size the output buffer.
     unsafe {
-        let needed =
-            win::MultiByteToWideChar(cp, 0, bytes.as_ptr(), bytes.len() as i32, std::ptr::null_mut(), 0);
+        let needed = win::MultiByteToWideChar(
+            cp,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
         if needed <= 0 {
             return String::from_utf8_lossy(bytes).into_owned();
         }

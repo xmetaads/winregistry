@@ -57,7 +57,11 @@ pub fn coalesce(keys: Vec<KeyBlock>) -> (Vec<KeyBlock>, CoalesceReport) {
         }
 
         for v in block.values {
-            match existing.values.iter_mut().find(|e| same_value(&e.name, &v.name)) {
+            match existing
+                .values
+                .iter_mut()
+                .find(|e| same_value(&e.name, &v.name))
+            {
                 Some(prev) => {
                     if prev.data != v.data {
                         report.conflicts.push(Conflict {
@@ -76,10 +80,7 @@ pub fn coalesce(keys: Vec<KeyBlock>) -> (Vec<KeyBlock>, CoalesceReport) {
         }
     }
 
-    let out = order
-        .into_iter()
-        .filter_map(|k| slots.remove(&k))
-        .collect();
+    let out = order.into_iter().filter_map(|k| slots.remove(&k)).collect();
     (out, report)
 }
 

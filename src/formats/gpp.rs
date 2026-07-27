@@ -71,7 +71,11 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
             }
         };
 
-        let key = props.attr("key").unwrap_or("").trim_matches('\\').to_string();
+        let key = props
+            .attr("key")
+            .unwrap_or("")
+            .trim_matches('\\')
+            .to_string();
         let path = RegPath { hive, sub: key };
         let action = props.attr("action").unwrap_or("U").to_ascii_uppercase();
         let name = props.attr("name").unwrap_or("");
@@ -126,10 +130,15 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
     let total: usize = blocks.iter().map(|b| b.values.len()).sum();
     notes.insert(
         0,
-        format!("{total} value(s) across {} key(s), {deletes} delete action(s)", blocks.len()),
+        format!(
+            "{total} value(s) across {} key(s), {deletes} delete action(s)",
+            blocks.len()
+        ),
     );
     if disabled > 0 {
-        notes.push(format!("{disabled} item(s) marked disabled=\"1\" were skipped"));
+        notes.push(format!(
+            "{disabled} item(s) marked disabled=\"1\" were skipped"
+        ));
     }
     notes.push(
         "GPP writes persist after the GPO stops applying unless the item is set to \
@@ -165,12 +174,17 @@ fn decode_value(props: &Node, ty: &str) -> Result<RegData, String> {
     }
 }
 
-fn block_for<'a>(blocks: &'a mut Vec<KeyBlock>, path: RegPath) -> &'a mut KeyBlock {
+fn block_for(blocks: &mut Vec<KeyBlock>, path: RegPath) -> &mut KeyBlock {
     let fold = path.fold();
     if let Some(i) = blocks.iter().position(|b| b.path.fold() == fold) {
         return &mut blocks[i];
     }
-    blocks.push(KeyBlock { path, delete: false, values: Vec::new(), line: 0 });
+    blocks.push(KeyBlock {
+        path,
+        delete: false,
+        values: Vec::new(),
+        line: 0,
+    });
     blocks.last_mut().unwrap()
 }
 
@@ -227,23 +241,37 @@ mod tests {
     #[test]
     fn reads_create_replace_update_as_writes() {
         let (b, _) = read(XML.as_bytes()).unwrap();
-        assert_eq!(val(&b, "Software\\Acme", "Server"), RegData::Sz("acme.test".into()));
+        assert_eq!(
+            val(&b, "Software\\Acme", "Server"),
+            RegData::Sz("acme.test".into())
+        );
         assert_eq!(val(&b, "Software\\Acme", "Port"), RegData::Dword(8080));
-        assert_eq!(val(&b, "Software\\Acme", "Recent").type_id(), Some(REG_MULTI_SZ));
+        assert_eq!(
+            val(&b, "Software\\Acme", "Recent").type_id(),
+            Some(REG_MULTI_SZ)
+        );
     }
 
     #[test]
     fn multi_sz_comes_from_child_value_elements() {
         let (b, _) = read(XML.as_bytes()).unwrap();
-        let RegData::Hex { bytes, .. } = val(&b, "Software\\Acme", "Recent") else { panic!() };
-        assert_eq!(crate::model::utf16_from_bytes(&bytes), vec!["a.txt", "b.txt"]);
+        let RegData::Hex { bytes, .. } = val(&b, "Software\\Acme", "Recent") else {
+            panic!()
+        };
+        assert_eq!(
+            crate::model::utf16_from_bytes(&bytes),
+            vec!["a.txt", "b.txt"]
+        );
     }
 
     #[test]
     fn delete_action_distinguishes_value_from_key() {
         let (b, _) = read(XML.as_bytes()).unwrap();
         assert_eq!(val(&b, "Software\\Acme", "Legacy"), RegData::Delete);
-        let old = b.iter().find(|x| x.path.sub == "Software\\AcmeOld").unwrap();
+        let old = b
+            .iter()
+            .find(|x| x.path.sub == "Software\\AcmeOld")
+            .unwrap();
         assert!(old.delete, "action=D with an empty name deletes the key");
     }
 

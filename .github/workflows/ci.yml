@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on any warning. The codebase is warning-free today; this is
+  # what keeps it that way.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Test (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The integration suite writes to HKCU and reads HKLM. It asserts that
+      # HKLM is NOT writable, so it must not run elevated — GitHub's Windows
+      # runners are unelevated by default, which is exactly the target
+      # environment.
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Verify the manifest is embedded and asInvoker
+        shell: pwsh
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("target/release/regx.exe")
+          $text  = [Text.Encoding]::ASCII.GetString($bytes)
+          if ($text -notmatch 'requestedExecutionLevel\s+level="asInvoker"') {
+            throw "the asInvoker manifest is not embedded in the binary"
+          }
+          if ($text -match 'requestedExecutionLevel\s+level="requireAdministrator"') {
+            throw "the binary requests elevation"
+          }
+          "manifest verified: asInvoker"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regx-x86_64
+          path: target/release/regx.exe
+
+  build-arm64:
+    name: Build (ARM64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+
+      # The ARM64 MSVC linker is not installed on the runner by default, and
+      # without it the target silently fails to link. Installing it here is what
+      # makes an ARM64 claim in the documentation verifiable rather than assumed.
+      - name: Install the ARM64 MSVC toolchain
+        shell: pwsh
+        run: |
+          $vs = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          $ids = (& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath)
+          & $vs modify --installPath $ids --quiet --norestart --nocache `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 | Out-Null
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            throw "failed to install the ARM64 toolchain (exit $LASTEXITCODE)"
+          }
+
+      - name: Build
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regx-aarch64
+          path: target/aarch64-pc-windows-msvc/release/regx.exe
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Two separate questions, both of which procurement asks:
+      # are any dependencies known-vulnerable, and are all licences acceptable?
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Audit advisories, licences, sources and duplicates
+        run: cargo deny check
+
+  site:
+    name: Site checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every internal link and anchor resolves
+        run: python3 scripts/check_site.py
+
+      - name: vercel.json stays consistent with the pages
+        run: python3 scripts/check_vercel.py
