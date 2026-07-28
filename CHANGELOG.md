@@ -26,6 +26,14 @@ JSON.
 
 ### Added
 
+- **Administrative policy over regx itself.** Read from
+  `HKLM\SOFTWARE\Policiesegx` and nowhere else — a standard user can write
+  to HKCU, so honouring a per-user copy would let the restricted party lift
+  their own restrictions. An administrator can mandate an audit log, force
+  redaction, raise the redirection floor, deny key prefixes, disable the
+  offline hive engine and take away `-y`. A flag may make policy stricter,
+  never looser. An ADMX template ships in `policy/`, and `regx inspect` reads
+  it with the same reader used for anyone else's.
 - **Tamper-evident audit log.** `--audit-log FILE` (or `REGX_AUDIT_LOG`, so it
   can be enforced machine-wide) appends one JSON object per registry mutation:
   timestamp, actor SID taken from the process token rather than the settable

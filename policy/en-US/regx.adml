@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources revision="1.0" schemaVersion="1.0">
+  <displayName>regx administrative template</displayName>
+  <description>Constrains what the regx registry CLI may do on this machine.</description>
+
+  <resources>
+    <stringTable>
+      <string id="Cat_Regx">regx</string>
+
+      <string id="AuditLog">Require an audit log</string>
+      <string id="AuditLog_Help">Every registry change regx makes is recorded to this file, whether or not the operator passed --audit-log.
+
+Records are hash-chained: altering or removing one breaks the chain from that point, and "regx audit &lt;file&gt;" reports where. Point this at a location users can append to but not rewrite, and ship it somewhere append-only if the trail has to survive a determined local administrator.
+
+If disabled or not configured, logging happens only when the operator asks for it.</string>
+
+      <string id="AuditRedact">Redact values in the audit log</string>
+      <string id="AuditRedact_Help">Records the SHA-256 and byte length of each value instead of the value itself, and elides value data from the recorded command line.
+
+Enable this where registry values hold licence keys, tokens or connection strings — without it the audit log becomes a secret in its own right. It is still enough to prove a specific value was written, or to compare two runs.
+
+If disabled or not configured, the operator decides with --audit-redact.</string>
+
+      <string id="MinConfidence">Minimum redirection confidence</string>
+      <string id="MinConfidence_Help">Smart Redirection rewrites HKEY_LOCAL_MACHINE paths to their per-user equivalent, grading each mapping. This sets the floor below which a mapping is refused.
+
+High: only mappings Windows itself honours, such as Software\Classes and the per-user Run key.
+Medium: also mappings that work when the application checks HKCU. This is regx's own default.
+Low: also mappings unlikely to take effect, such as machine policies that Group Policy refresh will overwrite.
+
+The operator may ask for a stricter floor but not a looser one. If not configured, regx uses medium.</string>
+      <string id="Conf_High">High — only mappings Windows honours</string>
+      <string id="Conf_Medium">Medium — also application-dependent mappings</string>
+      <string id="Conf_Low">Low — also mappings unlikely to take effect</string>
+
+      <string id="DenyKeys">Deny writes to these keys</string>
+      <string id="DenyKeys_Help">One registry path per line. regx refuses any operation that would write to these keys or anything beneath them, and writes nothing at all rather than applying the rest of a file.
+
+Matching is on whole path components and is case-insensitive, so HKEY_CURRENT_USER\Software\Acme covers Acme and its subkeys but not AcmeOther.
+
+This restricts regx only. It is not an ACL, and does not stop other tools.</string>
+
+      <string id="DisableHive">Disable the offline hive engine</string>
+      <string id="DisableHive_Help">Forbids the "regx hive" command, which mounts a hive file through RegLoadAppKey — an API that needs no administrator rights.
+
+Enable this where users must not be able to read or edit hive files belonging to other profiles, backups or mounted images. The rest of regx continues to work.
+
+If disabled or not configured, the hive engine is available and still bounded by NTFS permissions on the file.</string>
+
+      <string id="RequireConfirm">Require confirmation for every write</string>
+      <string id="RequireConfirm_Help">Ignores -y, so a human confirms each change interactively.
+
+Enable this where regx must not be usable from an unattended script. Note that --dry-run is never gated, because it does not write.</string>
+    </stringTable>
+
+    <presentationTable>
+      <presentation id="AuditLog">
+        <textBox refId="AuditLogPath">
+          <label>Audit log path</label>
+          <defaultValue>C:\ProgramData\regx\audit.jsonl</defaultValue>
+        </textBox>
+      </presentation>
+
+      <presentation id="MinConfidence">
+        <dropdownList refId="MinConfidenceLevel" noSort="true" defaultItem="0">Floor</dropdownList>
+      </presentation>
+
+      <presentation id="DenyKeys">
+        <multiTextBox refId="DenyKeysList">Denied key paths, one per line</multiTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

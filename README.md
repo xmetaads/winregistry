@@ -135,6 +135,36 @@ session header, which is exactly the hole an early version of this had.
 A `--dry-run` is logged as `simulated`, so a rehearsal is distinguishable from
 the real thing in the record.
 
+## Administrative policy
+
+A security team's objection to deploying a registry editor is not that it might
+be unsigned — that is solvable with a certificate. It is that they cannot govern
+what it does once it is on the machine.
+
+`regx` reads policy from `HKLM\SOFTWARE\Policiesegx` and **nowhere else**.
+A standard user can write freely to HKCU, so honouring a per-user copy would let
+the person being restricted lift their own restrictions. HKCU is not consulted,
+even as a fallback. By the same reasoning a command-line flag can make policy
+stricter but never looser.
+
+| Value | Type | Effect |
+|---|---|---|
+| `AuditLog` | `REG_SZ` | Every mutation is logged here, whether or not `--audit-log` was passed |
+| `AuditRedact` | `REG_DWORD` | Force `--audit-redact` on |
+| `MinConfidence` | `REG_SZ` | Redirection floor: `high`, `medium` or `low` |
+| `DenyKeys` | `REG_MULTI_SZ` | Key prefixes `regx` refuses to write to. A denied key aborts the whole operation rather than being quietly skipped |
+| `DisableHive` | `REG_DWORD` | Forbid the offline hive engine |
+| `RequireConfirm` | `REG_DWORD` | Ignore `-y`; a human confirms each write |
+
+An ADMX template is in [`policy/`](policy/) for deployment through Group Policy.
+`regx --self-check` reports what is in force, and `regx inspect policy/regx.admx`
+reads the template with the same reader used for anyone else's — so a mistake in
+it surfaces before the Group Policy editor sees it.
+
+Deny matching is on whole path components and case-insensitive:
+`HKCU\Software\Acme` covers `Acme` and its subkeys but not `AcmeOther`. This
+restricts `regx` only; it is not an ACL and does not constrain other tools.
+
 ## Build provenance
 
 ```

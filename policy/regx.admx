@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Administrative template for regx.
+
+  Copy this file to \\<domain>\SYSVOL\<domain>\Policies\PolicyDefinitions\
+  (or %WINDIR%\PolicyDefinitions for a single machine) together with
+  en-US\regx.adml, then configure under
+  Computer Configuration -> Administrative Templates -> regx.
+
+  Every setting is Machine class and lands under
+  HKLM\SOFTWARE\Policies\regx, which a standard user cannot write to. That is
+  deliberate: regx reads policy from there and nowhere else, so the person
+  being restricted cannot lift the restriction.
+
+  `regx inspect policy/regx.admx` reads this file, which is a reasonable way to
+  confirm what it declares before deploying it.
+-->
+<policyDefinitions revision="1.0" schemaVersion="1.0">
+  <policyNamespaces>
+    <target prefix="regx" namespace="WinRegistry.Policies.Regx"/>
+    <using prefix="windows" namespace="Microsoft.Policies.Windows"/>
+  </policyNamespaces>
+
+  <resources minRequiredRevision="1.0"/>
+
+  <categories>
+    <category name="Regx" displayName="$(string.Cat_Regx)">
+      <parentCategory ref="windows:Software"/>
+    </category>
+  </categories>
+
+  <policies>
+
+    <policy name="AuditLog" class="Machine"
+            displayName="$(string.AuditLog)"
+            explainText="$(string.AuditLog_Help)"
+            key="SOFTWARE\Policies\regx"
+            presentation="$(presentation.AuditLog)">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <elements>
+        <text id="AuditLogPath" valueName="AuditLog" required="true" maxLength="260"/>
+      </elements>
+    </policy>
+
+    <policy name="AuditRedact" class="Machine"
+            displayName="$(string.AuditRedact)"
+            explainText="$(string.AuditRedact_Help)"
+            key="SOFTWARE\Policies\regx" valueName="AuditRedact">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <enabledValue><decimal value="1"/></enabledValue>
+      <disabledValue><decimal value="0"/></disabledValue>
+    </policy>
+
+    <policy name="MinConfidence" class="Machine"
+            displayName="$(string.MinConfidence)"
+            explainText="$(string.MinConfidence_Help)"
+            key="SOFTWARE\Policies\regx"
+            presentation="$(presentation.MinConfidence)">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <elements>
+        <enum id="MinConfidenceLevel" valueName="MinConfidence" required="true">
+          <item displayName="$(string.Conf_High)">
+            <value><string>high</string></value>
+          </item>
+          <item displayName="$(string.Conf_Medium)">
+            <value><string>medium</string></value>
+          </item>
+          <item displayName="$(string.Conf_Low)">
+            <value><string>low</string></value>
+          </item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="DenyKeys" class="Machine"
+            displayName="$(string.DenyKeys)"
+            explainText="$(string.DenyKeys_Help)"
+            key="SOFTWARE\Policies\regx"
+            presentation="$(presentation.DenyKeys)">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <elements>
+        <multiText id="DenyKeysList" valueName="DenyKeys" required="true"/>
+      </elements>
+    </policy>
+
+    <policy name="DisableHive" class="Machine"
+            displayName="$(string.DisableHive)"
+            explainText="$(string.DisableHive_Help)"
+            key="SOFTWARE\Policies\regx" valueName="DisableHive">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <enabledValue><decimal value="1"/></enabledValue>
+      <disabledValue><decimal value="0"/></disabledValue>
+    </policy>
+
+    <policy name="RequireConfirm" class="Machine"
+            displayName="$(string.RequireConfirm)"
+            explainText="$(string.RequireConfirm_Help)"
+            key="SOFTWARE\Policies\regx" valueName="RequireConfirm">
+      <parentCategory ref="Regx"/>
+      <supportedOn ref="windows:SUPPORTED_Windows7"/>
+      <enabledValue><decimal value="1"/></enabledValue>
+      <disabledValue><decimal value="0"/></disabledValue>
+    </policy>
+
+  </policies>
+</policyDefinitions>

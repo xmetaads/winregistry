@@ -10,6 +10,7 @@ mod formats;
 mod hive;
 mod model;
 mod parser;
+mod policy;
 mod redirect;
 mod selfcheck;
 mod sha256;
@@ -70,8 +71,12 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<i32> {
+    // Read before anything else so every enforcement point sees the same
+    // policy, and so a machine with none configured pays for one key open.
+    let policy = policy::Policy::load();
+
     if cli.self_check {
-        let code = cmd_self_check(&cli.global);
+        let code = cmd_self_check(&cli.global, &policy);
         if cli.command.is_none() {
             return Ok(code);
         }
@@ -96,7 +101,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             input,
             redirect,
             reg4,
-        } => cmd_convert(cli, file, out.as_deref(), input, redirect, *reg4),
+        } => cmd_convert(cli, &policy, file, out.as_deref(), input, redirect, *reg4),
         Command::Merge { files, out } => cmd_merge(cli, files, out.as_deref()),
         Command::Import {
             files,
@@ -106,6 +111,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             no_backup,
         } => cmd_import(
             cli,
+            &policy,
             ImportJob {
                 files,
                 input,
@@ -122,6 +128,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             prune,
         } => cmd_import(
             cli,
+            &policy,
             ImportJob {
                 files: std::slice::from_ref(file),
                 input,
@@ -165,19 +172,27 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
             r#type,
             data,
             redirect,
-        } => cmd_set(cli, key, value, r#type, data, redirect),
+        } => cmd_set(cli, &policy, key, value, r#type, data, redirect),
         Command::Delete {
             key,
             value,
             recursive,
-        } => cmd_delete(cli, key, value.as_deref(), *recursive),
+        } => cmd_delete(cli, &policy, key, value.as_deref(), *recursive),
         Command::Probe { key } => cmd_probe(cli, key),
         Command::Hive {
             file,
             op,
             create,
             exclusive,
-        } => cmd_hive(cli, file, op, *create, *exclusive),
+        } => {
+            if policy.disable_hive {
+                return Err(anyhow!(
+                    "the offline hive engine is disabled by administrative policy \
+                     (HKLM\\SOFTWARE\\Policies\\regx, DisableHive)"
+                ));
+            }
+            cmd_hive(cli, file, op, *create, *exclusive)
+        }
         Command::Diff {
             a,
             b,
@@ -308,17 +323,32 @@ fn reg_exit(e: &winreg::Error) -> i32 {
 /// Failing to open it aborts the command rather than proceeding unlogged: an
 /// operator who asked for an audit trail has to be able to rely on getting one,
 /// and silently continuing would be the worst outcome of the three.
-fn open_audit(cli: &Cli, command: &str) -> anyhow::Result<Option<audit::Logger>> {
-    let Some(path) = &cli.global.audit_log else {
-        return Ok(None);
+fn open_audit(
+    cli: &Cli,
+    policy: &policy::Policy,
+    command: &str,
+) -> anyhow::Result<Option<audit::Logger>> {
+    // Policy wins where it is stricter: an administrator's log path is used
+    // when the caller supplied none, and redaction can be turned on but never
+    // off. A flag may add restriction, never remove it.
+    let path = match (&policy.audit_log, &cli.global.audit_log) {
+        (Some(required), _) => required,
+        (None, Some(asked)) => asked,
+        (None, None) => return Ok(None),
     };
-    let logger = audit::Logger::open(path, cli.global.audit_redact, command)
+    let redact = cli.global.audit_redact || policy.audit_redact;
+    let logger = audit::Logger::open(path, redact, command)
         .with_context(|| format!("cannot open the audit log {}", path.display()))?;
     if cli.global.log_level >= LogLevel::Info {
         eprintln!(
-            "regx: audit log -> {}{}",
+            "regx: audit log -> {}{}{}",
             path.display(),
-            if cli.global.audit_redact {
+            if policy.audit_log.is_some() {
+                " (required by policy)"
+            } else {
+                ""
+            },
+            if redact {
                 " (values redacted to digests)"
             } else {
                 ""
@@ -326,6 +356,23 @@ fn open_audit(cli: &Cli, command: &str) -> anyhow::Result<Option<audit::Logger>>
         );
     }
     Ok(Some(logger))
+}
+
+/// Refuse the whole operation if policy denies any key it would touch.
+///
+/// Failing rather than dropping the offending block: a partial apply that
+/// silently omitted what an administrator forbade would leave the operator
+/// believing the file went in whole.
+fn enforce_denies(policy: &policy::Policy, file: &RegFile) -> anyhow::Result<()> {
+    for block in &file.keys {
+        if let Some(rule) = policy.denies(&block.path) {
+            return Err(anyhow!(
+                "{} is denied by administrative policy (rule: {rule}). Nothing was written.",
+                block.path
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The command line as recorded in the audit log.
@@ -339,9 +386,17 @@ fn parse_key(s: &str) -> anyhow::Result<RegPath> {
     })
 }
 
-fn confirm(g: &GlobalOpts, prompt: &str) -> bool {
-    if g.yes || g.dry_run {
+fn confirm(g: &GlobalOpts, policy: &policy::Policy, prompt: &str) -> bool {
+    // A dry run is not a write, so it is never gated.
+    if g.dry_run {
         return true;
+    }
+    // -y is a convenience an administrator can take away.
+    if g.yes {
+        if !policy.require_confirm {
+            return true;
+        }
+        eprintln!("regx: policy requires confirmation; -y does not apply");
     }
     eprint!("{prompt} [y/N] ");
     let _ = std::io::stderr().flush();
@@ -361,17 +416,42 @@ struct RedirectOutcome {
     refused: usize,
 }
 
-fn apply_redirect(file: &mut RegFile, opts: &RedirectOpts, level: LogLevel) -> RedirectOutcome {
+fn apply_redirect(
+    file: &mut RegFile,
+    opts: &RedirectOpts,
+    admin: &policy::Policy,
+    level: LogLevel,
+) -> RedirectOutcome {
     let policy = match opts.redirect {
         RedirectMode::Off => Policy::Off,
         RedirectMode::ClassesOnly => Policy::ClassesOnly,
         RedirectMode::Auto | RedirectMode::Force => Policy::Auto,
     };
-    let floor = match (opts.redirect, opts.min_confidence) {
+    let mut floor = match (opts.redirect, opts.min_confidence) {
         (RedirectMode::Force, _) | (_, MinConfidence::Low) => Confidence::Low,
         (_, MinConfidence::Medium) => Confidence::Medium,
         (_, MinConfidence::High) => Confidence::High,
     };
+
+    // Policy raises the floor and never lowers it: --min-confidence low cannot
+    // undo an administrator's requirement, while --min-confidence high still
+    // works on top of it.
+    if let Some(required) = admin.min_confidence.as_deref() {
+        let want = match required {
+            "high" => Some(Confidence::High),
+            "medium" => Some(Confidence::Medium),
+            "low" => Some(Confidence::Low),
+            _ => None,
+        };
+        if let Some(w) = want {
+            if w > floor {
+                if level >= LogLevel::Info {
+                    eprintln!("  policy raises the redirection floor to {}", w.label());
+                }
+                floor = w;
+            }
+        }
+    }
 
     let mut kept = Vec::new();
     let mut out = RedirectOutcome {
@@ -555,6 +635,7 @@ fn cmd_validate(
 
 fn cmd_convert(
     cli: &Cli,
+    policy: &policy::Policy,
     input: &Path,
     out: Option<&Path>,
     iopts: &cli::InputOpts,
@@ -563,7 +644,7 @@ fn cmd_convert(
 ) -> anyhow::Result<i32> {
     let mut file = read_any(cli, input, iopts)?.file;
     file.format = if reg4 { RegFormat::V4 } else { RegFormat::V5 };
-    let r = apply_redirect(&mut file, ropts, cli.global.log_level);
+    let r = apply_redirect(&mut file, ropts, policy, cli.global.log_level);
 
     if r.refused > 0 && ropts.on_refuse == OnRefuse::Fail {
         eprintln!(
@@ -650,7 +731,7 @@ struct ImportJob<'a> {
     prune: bool,
 }
 
-fn cmd_import(cli: &Cli, job: ImportJob<'_>) -> anyhow::Result<i32> {
+fn cmd_import(cli: &Cli, policy: &policy::Policy, job: ImportJob<'_>) -> anyhow::Result<i32> {
     let ImportJob {
         files,
         input: iopts,
@@ -670,7 +751,7 @@ fn cmd_import(cli: &Cli, job: ImportJob<'_>) -> anyhow::Result<i32> {
         keys: all,
     };
 
-    let r = apply_redirect(&mut file, ropts, cli.global.log_level);
+    let r = apply_redirect(&mut file, ropts, policy, cli.global.log_level);
     if r.refused > 0 && ropts.on_refuse == OnRefuse::Fail {
         return Ok(exit::REDIRECT_REFUSED);
     }
@@ -721,13 +802,15 @@ fn cmd_import(cli: &Cli, job: ImportJob<'_>) -> anyhow::Result<i32> {
     let n = file.keys.len();
     if !confirm(
         &cli.global,
+        policy,
         &format!("Apply {n} key block(s) to the live registry?"),
     ) {
         eprintln!("regx: aborted");
         return Ok(exit::OK);
     }
 
-    let mut logger = open_audit(cli, &command_line())?;
+    enforce_denies(policy, &file)?;
+    let mut logger = open_audit(cli, policy, &command_line())?;
     let rep = engine::apply_audited(&roots, &file, view, cli.global.dry_run, logger.as_mut());
     print_apply(cli, &rep);
 
@@ -946,6 +1029,7 @@ fn jstr(s: &str) -> String {
 
 fn cmd_set(
     cli: &Cli,
+    policy: &policy::Policy,
     key: &str,
     value: &str,
     ty: &str,
@@ -972,13 +1056,14 @@ fn cmd_set(
             line: 0,
         }],
     };
-    apply_redirect(&mut file, ropts, cli.global.log_level);
+    apply_redirect(&mut file, ropts, policy, cli.global.log_level);
     if file.keys.is_empty() {
         return Ok(exit::REDIRECT_REFUSED);
     }
 
     let roots = Roots::live();
-    let mut logger = open_audit(cli, &command_line())?;
+    enforce_denies(policy, &file)?;
+    let mut logger = open_audit(cli, policy, &command_line())?;
     let rep = engine::apply_audited(
         &roots,
         &file,
@@ -994,7 +1079,13 @@ fn cmd_set(
     })
 }
 
-fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> anyhow::Result<i32> {
+fn cmd_delete(
+    cli: &Cli,
+    policy: &policy::Policy,
+    key: &str,
+    value: Option<&str>,
+    recursive: bool,
+) -> anyhow::Result<i32> {
     let path = parse_key(key)?;
     let block = match value {
         Some(name) => KeyBlock {
@@ -1026,7 +1117,7 @@ fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> any
         }
     };
 
-    if !confirm(&cli.global, &format!("Delete {path}?")) {
+    if !confirm(&cli.global, policy, &format!("Delete {path}?")) {
         eprintln!("regx: aborted");
         return Ok(exit::OK);
     }
@@ -1037,7 +1128,8 @@ fn cmd_delete(cli: &Cli, key: &str, value: Option<&str>, recursive: bool) -> any
         keys: vec![block],
     };
     let roots = Roots::live();
-    let mut logger = open_audit(cli, &command_line())?;
+    enforce_denies(policy, &file)?;
+    let mut logger = open_audit(cli, policy, &command_line())?;
     let rep = engine::apply_audited(
         &roots,
         &file,
@@ -1922,7 +2014,7 @@ fn cmd_inspect(cli: &Cli, files: &[PathBuf], iopts: &cli::InputOpts) -> anyhow::
 // self-check
 // ---------------------------------------------------------------------------
 
-fn cmd_self_check(g: &GlobalOpts) -> i32 {
+fn cmd_self_check(g: &GlobalOpts, policy: &policy::Policy) -> i32 {
     let findings = selfcheck::run();
 
     if g.output == OutputFormat::Json {
@@ -1942,8 +2034,15 @@ fn cmd_self_check(g: &GlobalOpts) -> i32 {
         }
         s.push(']');
         println!("{s}");
+        let pol: Vec<String> = policy.describe().iter().map(|l| jstr(l)).collect();
+        println!("{{\"policy\": [{}]}}", pol.join(", "));
     } else {
         println!("regx self-check");
+        // What an administrator has imposed on this tool, listed alongside what
+        // the environment imposes on it — both constrain what a run can do.
+        for line in policy.describe() {
+            println!("  [pol ] {:<16} {line}", "administration");
+        }
         for f in &findings {
             let tag = match f.verdict {
                 selfcheck::Verdict::Ok => "ok  ",

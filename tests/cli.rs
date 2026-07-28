@@ -858,6 +858,55 @@ fn the_audit_log_can_be_enforced_through_the_environment() {
     assert_eq!(code(&run(&["audit", &s(&log)])), OK);
 }
 
+// ---------------------------------------------------------------------------
+// Administrative policy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn self_check_states_whether_a_policy_applies() {
+    let o = run(&["--self-check"]);
+    let text = stdout(&o);
+    assert!(
+        text.contains("administration"),
+        "--self-check must say what an administrator has imposed:\n{text}"
+    );
+    // On a machine with none configured it has to say so plainly, rather than
+    // leaving silence to be read as "no restrictions" or as "not checked".
+    assert!(
+        text.contains("no administrative policy") || text.contains("Policies\\regx"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_shipped_admx_is_readable_by_regx_itself() {
+    // The template an administrator deploys is parsed by the same reader used
+    // for anyone else's ADMX, so a mistake in it surfaces here rather than in
+    // the Group Policy editor.
+    let admx = Path::new("policy/regx.admx");
+    if !admx.exists() {
+        return; // running from somewhere other than the repository root
+    }
+
+    let o = run(&["inspect", &s(admx)]);
+    assert_eq!(code(&o), OK, "{}", stderr(&o));
+    let text = stdout(&o) + &stderr(&o);
+
+    assert!(text.contains("admx"), "not detected as ADMX:\n{text}");
+    assert!(
+        text.contains("6 of 6 policy definition"),
+        "every setting should be declared:\n{text}"
+    );
+    // The ADML must be found and resolve the display names, or the editor
+    // shows raw $(string.Id) tokens.
+    assert!(
+        text.contains("display string(s) resolved"),
+        "the en-US ADML was not found:\n{text}"
+    );
+    // Everything lands under the machine policy key, which is the point.
+    assert!(text.contains("HKEY_LOCAL_MACHINE"), "{text}");
+}
+
 #[test]
 fn version_reports_build_provenance() {
     let o = run(&["--version"]);
