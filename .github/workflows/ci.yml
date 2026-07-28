@@ -184,6 +184,14 @@ jobs:
 
           $cred = New-Object System.Management.Automation.PSCredential($user, $secure)
 
+          # Start-Process does not load the target account's profile, so the
+          # child inherits this process's TEMP — which belongs to the runner's
+          # administrator and is not writable by an unprivileged account. The
+          # suites create scratch directories under TEMP, so point it at the
+          # one that was just granted to the account.
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+
           $tests = Get-Content "$env:RUNNER_TEMP\test-binaries.txt" |
             Where-Object { $_ -and (Test-Path $_) } |
             ForEach-Object { Get-Item $_ }
