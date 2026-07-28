@@ -280,6 +280,41 @@ mod tests {
     }
 
     #[test]
+    fn every_registry_write_path_is_guarded() {
+        // A structural check rather than a behavioural one: the deny list is
+        // only as good as the number of places that consult it, and the hive
+        // engine was missed the first time round. If a new write path appears,
+        // this fails until it is wired in.
+        let main = include_str!("main.rs");
+
+        // The live paths: import/sync, set, delete.
+        assert_eq!(
+            main.matches("enforce_denies(policy, &file)?").count(),
+            3,
+            "expected the deny check in import/sync, set and delete"
+        );
+        // The offline hive paths: set, delete, import.
+        assert_eq!(
+            main.matches("enforce_hive_denies(policy, &file)?").count(),
+            3,
+            "expected the deny check in all three hive write operations"
+        );
+
+        // And every apply in the shipped binary must be the audited one. The
+        // unaudited entry point is #[cfg(test)] precisely so this holds.
+        assert_eq!(
+            main.matches("engine::apply(").count(),
+            0,
+            "a write path is bypassing the audit log"
+        );
+        assert_eq!(
+            main.matches("engine::apply_audited(").count(),
+            6,
+            "expected six audited write paths: import/sync, set, delete, and three hive ops"
+        );
+    }
+
+    #[test]
     fn an_unconfigured_policy_constrains_nothing_and_says_so() {
         let p = Policy::default();
         assert!(!p.constrains_anything());

@@ -764,6 +764,14 @@ fn cmd_import(cli: &Cli, policy: &policy::Policy, job: ImportJob<'_>) -> anyhow:
         });
     }
 
+    // Checked here, before anything happens: redirection has resolved the final
+    // destinations, and nothing has been written or asked yet. Leaving it until
+    // just before the apply meant a denied import still read the whole subtree
+    // to build an undo file, wrote that file, prompted the operator, waited for
+    // a yes — and only then refused, claiming "Nothing was written" while an
+    // undo file sat on disk.
+    enforce_denies(policy, &file)?;
+
     let roots = Roots::live();
     let view = view_of(&cli.global);
 
@@ -809,7 +817,6 @@ fn cmd_import(cli: &Cli, policy: &policy::Policy, job: ImportJob<'_>) -> anyhow:
         return Ok(exit::OK);
     }
 
-    enforce_denies(policy, &file)?;
     let mut logger = open_audit(cli, policy, &command_line())?;
     let rep = engine::apply_audited(&roots, &file, view, cli.global.dry_run, logger.as_mut());
     print_apply(cli, &rep);
