@@ -13,6 +13,7 @@ mod parser;
 mod redirect;
 mod selfcheck;
 mod sha256;
+mod signature;
 mod undo;
 mod winreg;
 mod writer;

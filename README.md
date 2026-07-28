@@ -152,8 +152,14 @@ source are identical. A working tree with uncommitted changes is reported as
 `<commit>-modified`.
 
 Releases carry a SHA-256 beside each binary, a CycloneDX SBOM, and a GitHub
-build provenance attestation. **They are not yet code-signed** — see
-[SECURITY.md](SECURITY.md) and the AppLocker section of the docs.
+build provenance attestation.
+
+**They are not yet code-signed.** `regx --self-check` reports its own signature
+status by asking Windows, against the same trust store AppLocker consults, so
+you can confirm rather than take this file's word for it.
+[docs/SIGNING.md](docs/SIGNING.md) is the complete path from no certificate to a
+signing pipeline — signing is the one barrier no feature work closes, and it
+needs a certificate rather than code.
 
 ## Companion-file discovery
 

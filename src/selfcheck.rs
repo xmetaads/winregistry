@@ -37,6 +37,7 @@ pub fn run() -> Vec<Finding> {
     f.push(process_identity());
     f.push(elevation());
     f.extend(wow64());
+    f.push(signature());
     f.push(image_location());
     f.push(mark_of_the_web());
     f.push(applocker());
@@ -125,6 +126,60 @@ fn wow64() -> Vec<Finding> {
         ),
     });
     out
+}
+
+/// Is this binary signed, and does the signature hold up on this machine?
+///
+/// Asked of Windows rather than asserted in a README, and against the same
+/// trust store AppLocker consults — so the answer here is the answer AppLocker
+/// will reach. This is the first thing an administrator needs to know, and the
+/// one gap no amount of feature work closes.
+fn signature() -> Finding {
+    let Some(exe) = crate::discover::own_executable() else {
+        return Finding {
+            area: "signature",
+            verdict: Verdict::Note,
+            detail: "could not resolve the executable path".into(),
+        };
+    };
+
+    let status = crate::signature::verify(&exe);
+    let verdict = match status {
+        crate::signature::Status::Trusted { .. } => Verdict::Ok,
+        crate::signature::Status::Unsigned => Verdict::Warn,
+        crate::signature::Status::Untrusted { .. } => Verdict::Warn,
+        crate::signature::Status::Unknown(_) => Verdict::Note,
+    };
+
+    // The label leads so a script can match on one stable word rather than the
+    // prose after it, and so the word and the consequence cannot drift apart.
+    let detail = match &status {
+        crate::signature::Status::Trusted { .. } => {
+            format!(
+                "{}: Authenticode is valid here - {}",
+                status.label(),
+                status.consequence()
+            )
+        }
+        crate::signature::Status::Unsigned => format!(
+            "{}: {}. Verify a download against its published SHA-256, and see docs/SIGNING.md \
+             to sign with an internal CA.",
+            status.label(),
+            status.consequence()
+        ),
+        crate::signature::Status::Untrusted { reason, .. } => {
+            format!("{}: {reason}. {}", status.label(), status.consequence())
+        }
+        crate::signature::Status::Unknown(why) => {
+            format!("{}: {why}", status.label())
+        }
+    };
+
+    Finding {
+        area: "signature",
+        verdict,
+        detail,
+    }
 }
 
 fn image_location() -> Finding {
@@ -539,6 +594,7 @@ mod tests {
             "process",
             "elevation",
             "wow64",
+            "signature",
             "image path",
             "mark-of-the-web",
             "applocker",

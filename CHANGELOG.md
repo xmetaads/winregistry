@@ -26,6 +26,18 @@ JSON.
 
 ### Added
 
+- **`--self-check` now verifies its own Authenticode signature** with
+  `WinVerifyTrust`, against the same trust store AppLocker consults — so the
+  answer it gives is the answer AppLocker will reach. Reports `trusted`,
+  `untrusted` (with the chain reason), `unsigned` or `unknown`, each with what
+  it means for getting the binary to run under AppLocker, WDAC and SmartScreen.
+  Revocation is deliberately not checked: this runs on machines with no
+  outbound access, where the lookup would stall rather than answer.
+- `docs/SIGNING.md`: the complete path from no certificate to a signing release
+  pipeline, covering EV versus OV versus an internal CA, the post-2023 hardware
+  key requirement that rules out a `.pfx` from a public CA, and how to verify a
+  release with both its checksum and its build provenance attestation.
+
 - **Tamper-evident audit log.** `--audit-log FILE` (or `REGX_AUDIT_LOG`) appends
   one JSON object per registry mutation: timestamp, actor SID, operation, and
   the value before as well as after. Records are hash-chained, so altering or
