@@ -134,6 +134,35 @@ impl Policy {
         })
     }
 
+    /// Is writing to `sub` inside a mounted hive forbidden?
+    ///
+    /// A mounted hive has no hive component — `HKCU` and `HKLM` are meaningless
+    /// for a file — so a rule is matched on its subkey path alone. A rule
+    /// protecting `HKCU\Software\Finance` therefore also protects
+    /// `Software\Finance` inside somebody's `NTUSER.DAT`, which is the point:
+    /// an administrator forbidding a setting means the setting, not one
+    /// particular route to it. Without this the offline hive engine was a
+    /// straight bypass of the deny list.
+    pub fn denies_hive_subkey(&self, sub: &str) -> Option<&str> {
+        let target = fold_str(sub.trim_matches('\\'));
+        self.deny_keys.iter().find_map(|rule| {
+            // Drop the rule's hive component; what remains is the subkey path.
+            let without_hive = match RegPath::parse(rule) {
+                Some(p) => p.sub,
+                None => rule.trim_matches('\\').to_string(),
+            };
+            let r = fold_str(without_hive.trim_matches('\\'));
+            if r.is_empty() {
+                return None;
+            }
+            if target == r || target.starts_with(&format!("{r}\\")) {
+                Some(rule.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Lines for `--self-check`, describing what is in force.
     pub fn describe(&self) -> Vec<String> {
         if !self.configured {
@@ -220,6 +249,34 @@ mod tests {
         assert!(p
             .denies(&RegPath::parse("HKCU\\Software\\Acme\\X").unwrap())
             .is_some());
+    }
+
+    #[test]
+    fn a_deny_rule_reaches_inside_a_mounted_hive() {
+        // The offline hive engine was a straight bypass: a rule protecting a
+        // key in the live registry did nothing about the same key inside
+        // somebody's NTUSER.DAT.
+        let p = policy_with(&["HKEY_CURRENT_USER\\Software\\Finance"]);
+        assert!(p.denies_hive_subkey("Software\\Finance").is_some());
+        assert!(p.denies_hive_subkey("Software\\Finance\\Payroll").is_some());
+        assert!(p.denies_hive_subkey("\\Software\\Finance\\").is_some());
+
+        // The rule's own hive is irrelevant for a file, so an HKLM rule still
+        // protects the same subkey path.
+        let p = policy_with(&["HKLM\\Software\\Finance"]);
+        assert!(p.denies_hive_subkey("Software\\Finance").is_some());
+
+        // And it still must not leak onto a neighbour.
+        assert!(p.denies_hive_subkey("Software\\FinanceOther").is_none());
+        assert!(p.denies_hive_subkey("Software\\Other").is_none());
+    }
+
+    #[test]
+    fn a_hive_deny_rule_naming_only_a_root_matches_nothing() {
+        // A rule of "HKCU" alone has an empty subkey path; treating that as a
+        // prefix would deny every hive write on the machine.
+        let p = policy_with(&["HKEY_CURRENT_USER"]);
+        assert!(p.denies_hive_subkey("Software\\Anything").is_none());
     }
 
     #[test]

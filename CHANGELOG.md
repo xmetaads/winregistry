@@ -83,6 +83,14 @@ JSON.
 
 ### Fixed
 
+- **The offline hive engine bypassed administrative policy.** Its three write
+  paths called the unaudited apply and consulted no deny list, so an
+  administrator's mandatory audit log and denied keys stopped at the live
+  registry — editing the same key inside somebody's NTUSER.DAT was recorded
+  nowhere and refused by nothing. Hive writes are now audited and deny-checked,
+  matched on the subkey path since a mounted file has no hive component. The
+  unaudited entry point is `#[cfg(test)]` now, so the binary contains no way to
+  write without reaching the log.
 - **Case folding merged registry keys that Windows keeps apart.** `fold_str`
   used `str::to_uppercase`, which applies full Unicode case mapping where one
   character can expand to several: `ß` becomes `SS`, the `ﬁ` ligature becomes

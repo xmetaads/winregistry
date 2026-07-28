@@ -312,6 +312,14 @@ impl ApplyReport {
 
 /// Apply every key block. `dry_run` performs all the *reads* (so permission
 /// problems still surface) but skips every write.
+/// Apply without an audit log.
+///
+/// `#[cfg(test)]` on purpose. Every write regx performs must be able to reach
+/// the audit log an administrator may have mandated, and the surest way to
+/// guarantee that is to leave no unaudited entry point compiled into the
+/// binary at all — the offline hive engine was such a bypass until it was
+/// found by inspection rather than by the compiler.
+#[cfg(test)]
 pub fn apply(roots: &Roots, file: &RegFile, view: View, dry_run: bool) -> ApplyReport {
     apply_audited(roots, file, view, dry_run, None)
 }

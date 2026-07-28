@@ -152,7 +152,7 @@ stricter but never looser.
 | `AuditLog` | `REG_SZ` | Every mutation is logged here, whether or not `--audit-log` was passed |
 | `AuditRedact` | `REG_DWORD` | Force `--audit-redact` on |
 | `MinConfidence` | `REG_SZ` | Redirection floor: `high`, `medium` or `low` |
-| `DenyKeys` | `REG_MULTI_SZ` | Key prefixes `regx` refuses to write to. A denied key aborts the whole operation rather than being quietly skipped |
+| `DenyKeys` | `REG_MULTI_SZ` | Key prefixes `regx` refuses to write to, in the live registry **and** inside a mounted hive. A denied key aborts the whole operation rather than being quietly skipped |
 | `DisableHive` | `REG_DWORD` | Forbid the offline hive engine |
 | `RequireConfirm` | `REG_DWORD` | Ignore `-y`; a human confirms each write |
 

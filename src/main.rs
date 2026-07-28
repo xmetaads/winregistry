@@ -191,7 +191,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
                      (HKLM\\SOFTWARE\\Policies\\regx, DisableHive)"
                 ));
             }
-            cmd_hive(cli, file, op, *create, *exclusive)
+            cmd_hive(cli, &policy, file, op, *create, *exclusive)
         }
         Command::Diff {
             a,
@@ -1178,6 +1178,7 @@ fn cmd_probe(cli: &Cli, key: &str) -> anyhow::Result<i32> {
 
 fn cmd_hive(
     cli: &Cli,
+    policy: &policy::Policy,
     file: &Path,
     op: &HiveOp,
     create: bool,
@@ -1251,7 +1252,7 @@ fn cmd_hive(
     }
 
     if ops.is_empty() {
-        worst = run_hive_op(cli, &session, op)?;
+        worst = run_hive_op(cli, policy, &session, op)?;
     } else {
         for (i, line) in ops.iter().enumerate() {
             let argv = split_argv(line);
@@ -1271,7 +1272,7 @@ fn cmd_hive(
                 }
             };
             eprintln!("regx: [{}/{}] {line}", i + 1, ops.len());
-            match run_hive_op(cli, &session, &sub) {
+            match run_hive_op(cli, policy, &session, &sub) {
                 Ok(c) if c != exit::OK => {
                     worst = c;
                     if !keep_going {
@@ -1325,7 +1326,35 @@ fn hive_path(sub: &str) -> RegPath {
     }
 }
 
-fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32> {
+/// Refuse a hive write that policy forbids.
+///
+/// A mounted hive has no hive component, so the rule is matched on its subkey
+/// path. Without this the offline engine was a straight bypass: an
+/// administrator's denied key was protected in the live registry and not in
+/// somebody's NTUSER.DAT.
+fn enforce_hive_denies(policy: &policy::Policy, file: &RegFile) -> anyhow::Result<()> {
+    for block in &file.keys {
+        if let Some(rule) = policy.denies_hive_subkey(&block.path.sub) {
+            return Err(anyhow!(
+                "{} inside this hive is denied by administrative policy (rule: {rule}). \
+                 Nothing was written.",
+                if block.path.sub.is_empty() {
+                    "the hive root"
+                } else {
+                    &block.path.sub
+                }
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn run_hive_op(
+    cli: &Cli,
+    policy: &policy::Policy,
+    s: &hive::Session,
+    op: &HiveOp,
+) -> anyhow::Result<i32> {
     let view = View::Native; // A mounted hive has no WOW64 split.
     match op {
         HiveOp::Info | HiveOp::Exec { .. } => Ok(exit::OK),
@@ -1392,7 +1421,10 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
                     line: 0,
                 }],
             };
-            let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
+            enforce_hive_denies(policy, &file)?;
+            let mut logger = open_audit(cli, policy, &command_line())?;
+            let rep =
+                engine::apply_audited(&s.roots, &file, view, cli.global.dry_run, logger.as_mut());
             print_apply(cli, &rep);
             Ok(if rep.failures.is_empty() {
                 exit::OK
@@ -1438,7 +1470,10 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
                 encoding: encoding::SourceEncoding::Utf16Le,
                 keys: vec![block],
             };
-            let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
+            enforce_hive_denies(policy, &file)?;
+            let mut logger = open_audit(cli, policy, &command_line())?;
+            let rep =
+                engine::apply_audited(&s.roots, &file, view, cli.global.dry_run, logger.as_mut());
             print_apply(cli, &rep);
             Ok(if rep.failures.is_empty() {
                 exit::OK
@@ -1468,7 +1503,10 @@ fn run_hive_op(cli: &Cli, s: &hive::Session, op: &HiveOp) -> anyhow::Result<i32>
             }
             let (keys, _) = coalesce::coalesce(std::mem::take(&mut file.keys));
             file.keys = keys;
-            let rep = engine::apply(&s.roots, &file, view, cli.global.dry_run);
+            enforce_hive_denies(policy, &file)?;
+            let mut logger = open_audit(cli, policy, &command_line())?;
+            let rep =
+                engine::apply_audited(&s.roots, &file, view, cli.global.dry_run, logger.as_mut());
             print_apply(cli, &rep);
             Ok(if rep.failures.is_empty() {
                 exit::OK
