@@ -27,7 +27,7 @@ JSON.
 ### Added
 
 - **Administrative policy over regx itself.** Read from
-  `HKLM\SOFTWARE\Policiesegx` and nowhere else — a standard user can write
+  `HKLM\SOFTWARE\Policies\regx` and nowhere else — a standard user can write
   to HKCU, so honouring a per-user copy would let the restricted party lift
   their own restrictions. An administrator can mandate an audit log, force
   redaction, raise the redirection floor, deny key prefixes, disable the
