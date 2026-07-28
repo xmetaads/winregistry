@@ -309,11 +309,23 @@ mod tests {
             ("fn cmd_import(", "if !confirm("),
             ("fn cmd_delete(", "if !confirm("),
         ] {
-            let body = &main[main.find(func).expect(func)..];
+            // Bounded to this function. Searching on to end-of-file would let
+            // a check deleted from one function be satisfied by the next one
+            // down, and a guard that can pass for the wrong reason is not a
+            // guard. `unwrap_or(usize::MAX)` had the same shape of flaw: a
+            // missing prompt would read as "the deny check comes first".
+            let start = main
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} not found"));
+            let rest = &main[start + func.len()..];
+            let body = &rest[..rest.find("\nfn ").unwrap_or(rest.len())];
+
             let deny = body
                 .find("enforce_denies(policy, &file)?")
-                .expect("no deny check");
-            let later = body.find(after).unwrap_or(usize::MAX);
+                .unwrap_or_else(|| panic!("{func} has no deny check"));
+            let later = body
+                .find(after)
+                .unwrap_or_else(|| panic!("{func} no longer contains {after:?}"));
             assert!(
                 deny < later,
                 "{func}: the deny check must precede {after:?}"
