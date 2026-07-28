@@ -14,9 +14,17 @@ that way.
 
 ### Run the tests unelevated
 
-The integration suite asserts that `HKLM\SOFTWARE` is **not** writable, because
-that is the environment the product is built for. Running the tests from an
-elevated shell will fail that assertion — correctly. Use a normal shell.
+A handful of assertions are about the *environment* rather than the code: that
+an HKLM write is refused, that `probe` reports HKLM read-only, that System32 is
+not writable, that `--self-check` says "not elevated". They encode the product's
+central premise, and they only mean anything as a standard user. Each one
+detects an elevated host and says plainly that it could not be exercised, so an
+elevated shell does not turn CI red on a property of the machine — but it also
+verifies nothing.
+
+CI covers this: a `Test (standard user)` job creates an unprivileged local
+account on the runner and re-runs the compiled test binaries as it, then fails
+if those assertions skipped again. Locally, just use a normal shell.
 
 The suite writes only under `HKCU\Software\regx-it-*` and removes each key on
 drop, including when an assertion fails.

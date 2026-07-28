@@ -124,6 +124,111 @@ jobs:
             target/release/regx.exe
             target/release/regx.exe.sha256
 
+  test-standard-user:
+    name: Test (standard user)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+
+      # windows-latest runs elevated, so the assertions that define this product
+      # — an HKLM write is refused, System32 is not writable, the process never
+      # elevates — are inverted there and skip themselves. That left the central
+      # premise unverified on every CI run, which is the wrong thing to be
+      # taking on trust.
+      #
+      # The compiled test binaries are therefore run again as an unprivileged
+      # local account created here, on a runner that is destroyed afterwards.
+      # Ask cargo which binaries it produced rather than matching names. A
+      # pattern would silently miss a test file added later, and this job
+      # passing while covering nothing is the failure worth designing out.
+      - name: Compile the tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lines = cargo test --all-targets --no-run --message-format=json
+          $exes = $lines |
+            Where-Object { $_ -match '^\{' } |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq "compiler-artifact" -and $_.executable -and $_.profile.test } |
+            ForEach-Object { $_.executable }
+
+          if (-not $exes) { throw "cargo reported no test executables" }
+          $exes | ForEach-Object { "  $_" }
+          $exes -join "`n" | Out-File -FilePath "$env:RUNNER_TEMP\test-binaries.txt" -Encoding utf8
+
+      - name: Run them as an unprivileged account
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Generated in memory and never written anywhere. The account exists
+          # for the length of this job on a machine that is discarded after it.
+          $bytes = [byte[]]::new(24)
+          [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $password = [Convert]::ToBase64String($bytes) + "aA1!"
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+
+          $user = "regxtest"
+          New-LocalUser -Name $user -Password $secure -AccountNeverExpires `
+              -UserMayNotChangePassword -Description "regx CI standard-user run" | Out-Null
+          # Deliberately NOT added to Administrators. That is the whole point.
+          Add-LocalGroupMember -Group "Users" -Member $user
+          "created $user, member of: $((Get-LocalUser $user | Get-LocalGroupMember -ErrorAction SilentlyContinue).Name -join ', ')"
+
+          # The account needs to read the workspace and write its own temp.
+          & icacls "${env:GITHUB_WORKSPACE}" /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
+          $scratch = Join-Path $env:RUNNER_TEMP "regxtest"
+          New-Item -ItemType Directory -Force $scratch | Out-Null
+          & icacls $scratch /grant "${user}:(OI)(CI)F" /T /Q | Out-Null
+
+          $cred = New-Object System.Management.Automation.PSCredential($user, $secure)
+
+          $tests = Get-Content "$env:RUNNER_TEMP\test-binaries.txt" |
+            Where-Object { $_ -and (Test-Path $_) } |
+            ForEach-Object { Get-Item $_ }
+          if (-not $tests) { throw "no test binaries were recorded by the compile step" }
+          "running $($tests.Count) test binary/binaries as $user"
+
+          $failed = @()
+          foreach ($t in $tests) {
+            "--- $($t.Name) ---"
+            $out = Join-Path $scratch "$($t.BaseName).out"
+            $err = Join-Path $scratch "$($t.BaseName).err"
+
+            $p = Start-Process -FilePath $t.FullName `
+                -ArgumentList "--nocapture" `
+                -Credential $cred `
+                -WorkingDirectory $scratch `
+                -RedirectStandardOutput $out `
+                -RedirectStandardError $err `
+                -PassThru -Wait -NoNewWindow
+            $text = (Get-Content $out -Raw -ErrorAction SilentlyContinue) +
+                    (Get-Content $err -Raw -ErrorAction SilentlyContinue)
+            $text | Write-Host
+
+            if ($p.ExitCode -ne 0) {
+              $failed += $t.Name
+              foreach ($line in ($text -split "`n" | Select-String "FAILED|panicked at")) {
+                Write-Host "::error title=Standard-user test::$($t.Name): $line"
+              }
+            }
+
+            # The point of this job is that these assertions run rather than
+            # skip. If they skipped here too, the account is not unprivileged
+            # and the job is proving nothing.
+            if ($text -match "SKIPPED: .*elevated") {
+              Write-Host "::error title=Standard-user test::assertions still skipped - the account is elevated, so this job verified nothing"
+              $failed += "$($t.Name) (skipped)"
+            }
+          }
+
+          Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
+          if ($failed.Count -gt 0) {
+            throw "failed as a standard user: $($failed -join ', ')"
+          }
+          Write-Host "::notice title=Standard-user test::The premise assertions - HKLM denied, System32 not writable, never elevated - were exercised for real."
+
   signing-pipeline:
     name: Signing pipeline
     runs-on: windows-latest
