@@ -124,6 +124,87 @@ jobs:
             target/release/regx.exe
             target/release/regx.exe.sha256
 
+  signing-pipeline:
+    name: Signing pipeline
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      # Signing is the last barrier to enterprise deployment and it needs a
+      # certificate, which is a procurement decision. What must not also be
+      # unknown is whether the pipeline around that certificate works. This
+      # rehearses the whole thing with a throwaway key generated here, on an
+      # ephemeral runner that is destroyed afterwards — so when a real
+      # certificate arrives, swapping it in is the only remaining step.
+      #
+      # Nothing here touches a developer's machine or trust store.
+      - name: Rehearse signing with a throwaway certificate
+        shell: pwsh
+        run: |
+          $exe = "target/release/regx.exe"
+          $signed = "target/release/regx-signed.exe"
+          Copy-Item $exe $signed
+
+          $cert = New-SelfSignedCertificate `
+              -Type CodeSigningCert `
+              -Subject "CN=regx CI signing rehearsal, O=winregistry.org" `
+              -KeyUsage DigitalSignature `
+              -HashAlgorithm SHA256 `
+              -CertStoreLocation Cert:\CurrentUser\My
+          "generated: $($cert.Subject) ($($cert.Thumbprint))"
+
+          # /fd SHA256 because SHA-1 is rejected by current Windows.
+          # No /tr here: the public timestamp services will not countersign a
+          # certificate they have never seen, and the release workflow does
+          # pass /tr with a real one. What this proves is that the signing and
+          # verification steps are wired correctly.
+          & signtool sign /fd SHA256 /sha1 $cert.Thumbprint $signed
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
+          "signtool: signed"
+
+      - name: Verify the rehearsal, and that regx reports it honestly
+        shell: pwsh
+        run: |
+          $signed = "target/release/regx-signed.exe"
+          $unsigned = "target/release/regx.exe"
+
+          $sig = Get-AuthenticodeSignature $signed
+          if ($sig.SignerCertificate -eq $null) {
+            throw "no signature was attached"
+          }
+          "attached: $($sig.SignerCertificate.Subject)"
+
+          # A self-signed certificate chains to a root the machine does not
+          # trust, so Windows must say UnknownError / NotTrusted here. If it
+          # said Valid, the trust decision would not mean anything.
+          "chain status: $($sig.Status)"
+          if ($sig.Status -eq "Valid") {
+            throw "a self-signed certificate must not validate; trust is not being checked"
+          }
+
+          # And regx's own reporting has to agree with Windows. An unsigned
+          # build says 'unsigned'; a signed-but-untrusted one says 'untrusted'.
+          # Reporting a signed binary as unsigned, or the reverse, is the
+          # failure mode that matters: an administrator would act on it.
+          $before = & $unsigned --self-check | Select-String "signature"
+          $after  = & $signed   --self-check | Select-String "signature"
+          "unsigned build -> $before"
+          "signed build   -> $after"
+
+          if ($before -notmatch "unsigned") {
+            throw "regx did not report the unsigned build as unsigned"
+          }
+          if ($after -notmatch "untrusted") {
+            throw "regx did not report the signed-but-untrusted build as untrusted"
+          }
+          "regx signature reporting agrees with Windows"
+
+          "::notice title=Signing pipeline::Rehearsed end to end with a throwaway certificate. Releases remain UNSIGNED until SIGNING_CERT_BASE64 and SIGNING_CERT_PASSWORD are configured - see docs/SIGNING.md."
+
   build-arm64:
     name: Build (ARM64)
     runs-on: windows-latest

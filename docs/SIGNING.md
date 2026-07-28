@@ -119,6 +119,27 @@ not change.
 Every unsigned release emits a workflow warning naming the gap, so it stays
 visible rather than becoming the status quo by default.
 
+## The pipeline is already rehearsed
+
+Before spending on a certificate, it is worth knowing the machinery around it
+works. CI runs a `Signing pipeline` job on every push that:
+
+1. generates a throwaway self-signed certificate on the runner,
+2. signs a build with `signtool`,
+3. confirms Windows attaches the signature and — correctly — refuses to
+   validate a chain it does not trust,
+4. confirms `regx --self-check` agrees with Windows: the unsigned build reports
+   `unsigned`, the signed-but-untrusted one reports `untrusted`.
+
+The runner is destroyed afterwards and nothing touches a developer's machine or
+trust store. What it establishes is that when a real certificate arrives,
+swapping it in is the only remaining step — the surrounding wiring has already
+been exercised.
+
+The rehearsal deliberately omits `/tr`. A public timestamp service will not
+countersign a certificate it has never seen, and the release workflow does pass
+`/tr` with a real one.
+
 ## Verifying a release
 
 ```powershell
