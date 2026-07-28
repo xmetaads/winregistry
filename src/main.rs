@@ -1124,18 +1124,23 @@ fn cmd_delete(
         }
     };
 
-    if !confirm(&cli.global, policy, &format!("Delete {path}?")) {
-        eprintln!("regx: aborted");
-        return Ok(exit::OK);
-    }
-
     let file = RegFile {
         format: RegFormat::V5,
         encoding: encoding::SourceEncoding::Utf16Le,
         keys: vec![block],
     };
-    let roots = Roots::live();
+
+    // Before the prompt, not after it. Asking someone to confirm a deletion
+    // that policy is about to refuse wastes their attention and teaches them
+    // the prompt does not mean what it says.
     enforce_denies(policy, &file)?;
+
+    if !confirm(&cli.global, policy, &format!("Delete {path}?")) {
+        eprintln!("regx: aborted");
+        return Ok(exit::OK);
+    }
+
+    let roots = Roots::live();
     let mut logger = open_audit(cli, policy, &command_line())?;
     let rep = engine::apply_audited(
         &roots,

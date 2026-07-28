@@ -300,6 +300,26 @@ mod tests {
             "expected the deny check in all three hive write operations"
         );
 
+        // The check must also come before anything the refusal would have to
+        // walk back — a written undo file, or a prompt already answered. Both
+        // orderings were wrong when first written, one function apart, so the
+        // relative positions are pinned rather than trusted.
+        for (func, after) in [
+            ("fn cmd_import(", "undo::snapshot"),
+            ("fn cmd_import(", "if !confirm("),
+            ("fn cmd_delete(", "if !confirm("),
+        ] {
+            let body = &main[main.find(func).expect(func)..];
+            let deny = body
+                .find("enforce_denies(policy, &file)?")
+                .expect("no deny check");
+            let later = body.find(after).unwrap_or(usize::MAX);
+            assert!(
+                deny < later,
+                "{func}: the deny check must precede {after:?}"
+            );
+        }
+
         // And every apply in the shipped binary must be the audited one. The
         // unaudited entry point is #[cfg(test)] precisely so this holds.
         assert_eq!(
