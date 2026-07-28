@@ -49,6 +49,11 @@ JSON.
 - `regx --version` reports the commit, its date, the target triple and the
   source URL. The commit date is used rather than the build clock so two builds
   of the same source are identical; an uncommitted tree reports `-modified`.
+- `tests/unicode.rs`: 10 tests driving the binary with Vietnamese, CJK,
+  Cyrillic, Greek, right-to-left Arabic and astral-plane text through every
+  input format, the live registry and the audit log. The registry stores
+  UTF-16, `.reg` is UTF-16LE and the text formats are UTF-8; each of those
+  boundaries is a place text can be lost, and each is now crossed by a test.
 - `tests/cli.rs`: 31 integration tests driving the built binary, covering exit
   codes, JSON output, `--dry-run` writing nothing, undo round trips, format
   detection, the audit chain and the offline hive lifecycle.
@@ -70,6 +75,15 @@ JSON.
 
 ### Fixed
 
+- **Case folding merged registry keys that Windows keeps apart.** `fold_str`
+  used `str::to_uppercase`, which applies full Unicode case mapping where one
+  character can expand to several: `ß` becomes `SS`, the `ﬁ` ligature becomes
+  `FI`. Windows uppercases a path one character at a time through
+  `RtlUpcaseUnicodeChar` and does not apply an expanding mapping, so
+  `Software\straße` and `Software\STRASSE` are two distinct keys — confirmed
+  against the live registry, which creates two subkeys. `coalesce` merged them
+  and kept one path with the other's values, and `diff` reported them equal.
+  Folding is now per-character and leaves any expansion alone.
 - **`--audit-redact` leaked the secret it exists to hide.** Values were
   redacted; the command line recorded in the session header was not, so
   `regx set … -d SECRET` wrote the secret straight into the log. A redacted log

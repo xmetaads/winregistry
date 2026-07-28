@@ -132,6 +132,35 @@ mod tests {
     }
 
     #[test]
+    fn keys_windows_keeps_distinct_are_not_merged() {
+        // `str::to_uppercase` maps ß to SS, so folding with it made these two
+        // paths compare equal and merged them, discarding one key's values.
+        // Windows uppercases per character and keeps them apart — verified
+        // against the live registry, which creates two subkeys for these names.
+        let (out, rep) = coalesce(vec![
+            key("HKCU\\Software\\straße", &[("mark", 1)]),
+            key("HKCU\\Software\\STRASSE", &[("mark", 2)]),
+        ]);
+        assert_eq!(out.len(), 2, "two distinct keys were merged: {out:?}");
+        assert_eq!(rep.blocks_merged, 0);
+
+        // The ligature has the same shape: ﬁ uppercases to FI.
+        let (out, _) = coalesce(vec![
+            key("HKCU\\Software\\ﬁle", &[("a", 1)]),
+            key("HKCU\\Software\\FILE", &[("a", 2)]),
+        ]);
+        assert_eq!(out.len(), 2, "{out:?}");
+
+        // Ordinary case folding must still work, in ASCII and beyond.
+        let (out, rep) = coalesce(vec![
+            key("HKCU\\Software\\Программа", &[("a", 1)]),
+            key("HKCU\\Software\\ПРОГРАММА", &[("a", 2)]),
+        ]);
+        assert_eq!(out.len(), 1, "case-only differences must still merge");
+        assert_eq!(rep.blocks_merged, 1);
+    }
+
+    #[test]
     fn identical_rewrite_is_not_a_conflict() {
         let (_, rep) = coalesce(vec![
             key("HKCU\\A", &[("x", 1)]),

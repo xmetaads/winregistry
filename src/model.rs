@@ -80,8 +80,29 @@ impl fmt::Display for RegPath {
 }
 
 /// Case-folding used everywhere identifiers are compared (key paths, value names).
+///
+/// Deliberately **not** `str::to_uppercase`. That applies full Unicode case
+/// mapping, where one character can expand to several: `ß` becomes `SS`, `ﬁ`
+/// becomes `FI`. Windows does not do that — the kernel uppercases the registry
+/// path one character at a time through `RtlUpcaseUnicodeChar`, so a mapping
+/// that would expand is simply not applied.
+///
+/// The difference is not cosmetic. `HKCU\Software\straße` and
+/// `HKCU\Software\STRASSE` are two distinct keys to Windows, and folding them
+/// together made `coalesce` merge them and `diff` call them equal — silently
+/// discarding one key's values. Anything that expands is therefore left alone.
 pub fn fold_str(s: &str) -> String {
-    s.to_uppercase()
+    s.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            let first = upper.next().unwrap_or(c);
+            if upper.next().is_some() {
+                c // a 1:many mapping; Windows would not apply it either
+            } else {
+                first
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
