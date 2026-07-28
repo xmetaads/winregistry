@@ -185,6 +185,19 @@ fn missing_key_exits_not_found() {
 
 #[test]
 fn hklm_write_exits_access_denied_without_elevation() {
+    if skip_if_elevated("HKLM writes are denied") {
+        // An elevated run would genuinely create the key, so remove it rather
+        // than leaving the test's own litter behind on the machine.
+        let _ = run(&[
+            "delete",
+            "HKLM\\SOFTWARE\\regx-it-should-fail",
+            "-r",
+            "-y",
+            "--log-level",
+            "error",
+        ]);
+        return;
+    }
     // The product's central premise: never elevate, fail cleanly instead.
     let o = run(&[
         "set",
