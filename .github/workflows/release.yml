@@ -179,9 +179,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
           # Everything between this version's heading and the next one.
-          awk -v tag="${TAG#v}" '
-            $0 ~ "^## \\[" tag "\\]" { on = 1; next }
-            on && /^## \[/ { exit }
+          # index() rather than a regex: the heading contains [ and ], and
+          # escaping those inside a shell-quoted awk program is how this
+          # silently produced empty notes the first time.
+          awk -v head="## [${TAG#v}]" '
+            index($0, head) == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
             on { print }
           ' CHANGELOG.md > dist/NOTES.md
           if [ ! -s dist/NOTES.md ]; then
