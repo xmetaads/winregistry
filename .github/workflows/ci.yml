@@ -45,8 +45,25 @@ jobs:
       # administrator, so they are inverted here and the tests say so and skip
       # rather than failing on a property of the runner. Run the suite locally
       # as a standard user to exercise them for real.
+      # Failures are re-emitted as annotations. A raw log needs a token to read,
+      # so a bare "exit code 1" tells anyone outside the repo nothing about
+      # which assertion broke — including on a fork or a public bug report.
       - name: Test
-        run: cargo test --all-targets -- --nocapture
+        shell: pwsh
+        run: |
+          $out = cargo test --all-targets --no-fail-fast -- --nocapture 2>&1 | Tee-Object -Variable lines
+          $out | Out-String | Write-Host
+
+          $failed = $lines | Select-String -Pattern '^test (.+) \.\.\. FAILED$' |
+                    ForEach-Object { $_.Matches[0].Groups[1].Value }
+          foreach ($t in $failed) { Write-Host "::error title=Test failed::$t" }
+
+          $panics = $lines | Select-String -Pattern "panicked at (.+)$" |
+                    ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 10
+          foreach ($p in $panics) { Write-Host "::error title=Panic::$p" }
+
+          if ($failed.Count -gt 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Note which assertions the runner could not exercise
         if: always()
