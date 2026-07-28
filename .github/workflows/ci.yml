@@ -214,21 +214,43 @@ jobs:
           # And regx's own reporting has to agree with Windows. An unsigned
           # build says 'unsigned'; a signed-but-untrusted one says 'untrusted'.
           # Reporting a signed binary as unsigned, or the reverse, is the
-          # failure mode that matters: an administrator would act on it.
-          $before = & $unsigned --self-check | Select-String "signature"
-          $after  = & $signed   --self-check | Select-String "signature"
-          "unsigned build -> $before"
-          "signed build   -> $after"
+          # failure that matters: an administrator would act on it.
+          #
+          # --self-check exits 5 when it finds anything to warn about, and an
+          # unsigned binary is exactly that. So its exit code is expected here
+          # and must not be mistaken for the step failing — which is what
+          # happened the first time this ran, since PowerShell carries the last
+          # native exit code out of the step.
+          $before = (& $unsigned --self-check | Out-String)
+          $beforeExit = $LASTEXITCODE
+          $after = (& $signed --self-check | Out-String)
+          $afterExit = $LASTEXITCODE
 
-          if ($before -notmatch "unsigned") {
-            throw "regx did not report the unsigned build as unsigned"
+          $beforeLine = ($before -split "`n" | Select-String "signature") -join ""
+          $afterLine  = ($after  -split "`n" | Select-String "signature") -join ""
+          "unsigned build (exit $beforeExit) -> $beforeLine"
+          "signed build   (exit $afterExit) -> $afterLine"
+
+          $problems = @()
+          if ($beforeLine -notmatch "unsigned") {
+            $problems += "the unsigned build was not reported as unsigned"
           }
-          if ($after -notmatch "untrusted") {
-            throw "regx did not report the signed-but-untrusted build as untrusted"
+          if ($afterLine -notmatch "untrusted") {
+            $problems += "the signed-but-untrusted build was not reported as untrusted"
+          }
+          if ($problems.Count -gt 0) {
+            foreach ($p in $problems) {
+              Write-Host "::error title=Signing pipeline::$p"
+            }
+            exit 1
           }
           "regx signature reporting agrees with Windows"
 
-          "::notice title=Signing pipeline::Rehearsed end to end with a throwaway certificate. Releases remain UNSIGNED until SIGNING_CERT_BASE64 and SIGNING_CERT_PASSWORD are configured - see docs/SIGNING.md."
+          Write-Host "::notice title=Signing pipeline::Rehearsed end to end with a throwaway certificate. Releases remain UNSIGNED until SIGNING_CERT_BASE64 and SIGNING_CERT_PASSWORD are configured - see docs/SIGNING.md."
+
+          # Explicit, so a tolerated non-zero from --self-check above cannot
+          # become the step's result.
+          exit 0
 
   build-arm64:
     name: Build (ARM64)
