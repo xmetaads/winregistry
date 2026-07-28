@@ -145,6 +145,23 @@ jobs:
       - name: Rehearse signing with a throwaway certificate
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
+          # signtool ships in the Windows SDK and is not on PATH by default.
+          # Locating it explicitly, newest first, rather than assuming — the
+          # first version of this step assumed and failed with a bare exit 1.
+          $signtool = Get-ChildItem `
+              "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+              -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $signtool) {
+            Write-Host "::error title=Signing pipeline::signtool.exe not found in the Windows SDK on this runner"
+            exit 1
+          }
+          "signtool: $signtool"
+
           $exe = "target/release/regx.exe"
           $signed = "target/release/regx-signed.exe"
           Copy-Item $exe $signed
@@ -155,26 +172,34 @@ jobs:
               -KeyUsage DigitalSignature `
               -HashAlgorithm SHA256 `
               -CertStoreLocation Cert:\CurrentUser\My
-          "generated: $($cert.Subject) ($($cert.Thumbprint))"
+          "certificate: $($cert.Subject) ($($cert.Thumbprint))"
 
           # /fd SHA256 because SHA-1 is rejected by current Windows.
-          # No /tr here: the public timestamp services will not countersign a
-          # certificate they have never seen, and the release workflow does
-          # pass /tr with a real one. What this proves is that the signing and
-          # verification steps are wired correctly.
-          & signtool sign /fd SHA256 /sha1 $cert.Thumbprint $signed
-          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
+          # No /tr: a public timestamp service will not countersign a
+          # certificate it has never seen, and the release workflow passes /tr
+          # with a real one. What this establishes is that the signing and
+          # verification wiring is correct.
+          $out = & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint $signed 2>&1
+          $out | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error title=Signing pipeline::signtool sign failed ($LASTEXITCODE): $($out -join ' ')"
+            exit 1
+          }
           "signtool: signed"
+
+          "SIGNTOOL=$signtool" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
       - name: Verify the rehearsal, and that regx reports it honestly
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $signed = "target/release/regx-signed.exe"
           $unsigned = "target/release/regx.exe"
 
           $sig = Get-AuthenticodeSignature $signed
-          if ($sig.SignerCertificate -eq $null) {
-            throw "no signature was attached"
+          if ($null -eq $sig.SignerCertificate) {
+            Write-Host "::error title=Signing pipeline::no signature was attached to the binary"
+            exit 1
           }
           "attached: $($sig.SignerCertificate.Subject)"
 
