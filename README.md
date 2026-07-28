@@ -6,7 +6,7 @@ CRT, no installer, no runtime dependency.
 
 ```
 cargo build --release      # -> target\release\regx.exe
-cargo test                 # 40 tests, including live-registry round trips
+cargo test                 # 158 tests, including live-registry round trips
 ```
 
 ## Repository layout
@@ -19,6 +19,10 @@ cargo test                 # 40 tests, including live-registry round trips
 | `vercel.json`, `.vercelignore` | Vercel deployment config: output directory, clean URLs, security headers |
 | `dev-server.py` | Local preview that reproduces Vercel's routing — `python dev-server.py` |
 | `design-system/` | Generated design system the site is built against |
+
+**Platforms.** x64 is built and tested. ARM64 is built by CI on every push, but
+has not been run on ARM64 hardware — the claim is "it compiles and links", not
+"it is verified there".
 
 `.claude/skills/` is intentionally not committed: it holds ~7 MB of vendored
 [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) data
