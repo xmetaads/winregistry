@@ -296,20 +296,21 @@ fn batch_manifest_is_atomic_and_reports_each_operation() {
     }
     let d = Scratch::new("batch");
     let key = LiveKey::new("batch");
+    let manifest_json = serde_json::json!({
+        "schema": "https://winregistry.org/schemas/batch-v1.json",
+        "schemaVersion": 1,
+        "operations": [
+            {"id": "first", "keys": [{"path": key.as_str(), "values": [
+                {"name": "A", "type": "REG_SZ", "data": "one"}
+            ]}]},
+            {"id": "second", "keys": [{"path": key.as_str(), "values": [
+                {"name": "B", "type": "REG_DWORD", "data": 2}
+            ]}]}
+        ]
+    });
     let manifest = d.write(
         "batch.json",
-        &format!(
-            r#"{{
-              "schema":"https://winregistry.org/schemas/batch-v1.json",
-              "schemaVersion":1,
-              "operations":[
-                {{"id":"first","keys":[{{"path":"{}","values":[{{"name":"A","type":"REG_SZ","data":"one"}}]}}]}},
-                {{"id":"second","keys":[{{"path":"{}","values":[{{"name":"B","type":"REG_DWORD","data":2}}]}}]}}
-              ]
-            }}"#,
-            key.as_str(),
-            key.as_str()
-        ),
+        &serde_json::to_string(&manifest_json).unwrap(),
     );
     let undo = d.path("batch-undo.reg");
     let applied = run(&[
@@ -2872,7 +2873,7 @@ fn saved_copy_plan_applies_only_while_source_and_destination_match() {
     assert!(undo.exists());
     assert!(
         stdout(&applied)
-            .contains("\"schema\":\"https://winregistry.org/schemas/copy-plan-result-v1.json\""),
+            .contains("\"schema\":\"https://winregistry.org/schemas/copy-plan-result-v2.json\""),
         "{}",
         stdout(&applied)
     );
@@ -3903,7 +3904,7 @@ fn live_ls_lists_keys_without_exposing_values() {
 
     let shallow = run(&["ls", root.as_str()]);
     assert_eq!(code(&shallow), OK, "{}", stderr(&shallow));
-    assert!(stdout(&shallow).contains(&child));
+    assert!(stdout(&shallow).contains("Child"), "{}", stdout(&shallow));
     assert!(!stdout(&shallow).contains("Grandchild"));
     assert!(!stdout(&shallow).contains("secret-"));
 
@@ -7028,7 +7029,11 @@ fn discover_finds_the_sidecar_and_flags_nothing_when_clean() {
     ]);
     assert_eq!(code(&json), OK, "stderr: {}", stderr(&json));
     let report: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
-    assert_eq!(report["executable"], s(&sc.path("tool.exe")));
+    let reported_executable = PathBuf::from(report["executable"].as_str().unwrap());
+    assert_eq!(
+        std::fs::canonicalize(reported_executable).unwrap(),
+        std::fs::canonicalize(sc.path("tool.exe")).unwrap()
+    );
     assert_eq!(report["stem"], "tool");
     assert_eq!(report["policy"], false);
     assert_eq!(report["registryPointer"], false);

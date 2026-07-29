@@ -23,9 +23,9 @@ does not by itself mean the product is complete.
   defaults. The existing `opt-level=z`, fat LTO, one codegen unit, aborting
   panics and stripping are retained; the new headroom does not come from
   removing Unicode regex, shell completion, static CRT, or another capability.
-- The suite contains 324 tests after the pipeline, output, search, saved-plan,
+- The suite contains 325 tests after the pipeline, output, search, saved-plan,
   batch, copy/move, atomic-rollback, and complete-reconciliation tests added
-  during this audit. All 212 unit, 96 CLI, 10 Unicode, 5 schema-contract, and
+  during this audit. All 213 unit, 96 CLI, 10 Unicode, 5 schema-contract, and
   1 generated-manual contract test pass locally;
   live HKCU cases now self-identify and skip on a host that denies HKCU writes,
   while the dedicated standard-user CI job executes them for real.
@@ -454,7 +454,7 @@ does not by itself mean the product is complete.
   while the current workspace exposes 123 non-target files. The tracked diff
   alone changes 44 files by +24,796/-2,216 lines, with another 55 untracked
   paths. Local HEAD has not diverged because none of this work is committed.
-- The public README at that commit reports 158 tests, versus 324 in the current
+- The public README at that commit reports 158 tests, versus 325 in the current
   verified worktree.
 - There are currently no releases, issues, or pull requests.
 - Security policy, security advisories, and secret scanning are enabled.

@@ -839,6 +839,10 @@ First working version.
 - `reg`, `pol` (Group Policy PReg binary), `admx` + `adml`, `gpp`
   (`Registry.xml`), `inf` (`[AddReg]`/`[DelReg]`), `json`, `csv`, `ini`.
   Detection reads content before extension.
+- Fix an INF `AddReg` panic on the valid three-field form
+  `root,subkey,value`; it now produces the specified default empty `REG_SZ`.
+- Make Windows CI fixtures robust to JSON backslashes, 8.3 short path aliases,
+  and copy-plan result schema v2.
 
 ### Safety
 

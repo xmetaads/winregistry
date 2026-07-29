@@ -267,7 +267,11 @@ fn add_line(line: &str, strings: &HashMap<String, String>) -> Result<Option<Line
             },
         )));
     }
-    let raw: Vec<String> = f[4..]
+    // Flags and data are optional. A three-field AddReg row names a value with
+    // the default REG_SZ type and empty data, so index four may not exist.
+    let raw: Vec<String> = f
+        .get(4..)
+        .unwrap_or_default()
         .iter()
         .map(|value| expand(value, strings))
         .collect::<Result<_, _>>()?;
@@ -989,5 +993,20 @@ HKCU,"Software\Acme\Old",,0x00000004
     fn missing_section_is_an_error_not_silence() {
         let inf = "[Version]\nSignature=\"x\"\n[X]\nAddReg=R\n[R]\nHKCU,\"S\",\"V\",0x0,\"d\"\n";
         assert!(read(inf.as_bytes(), Some("Nope"), None).is_err());
+    }
+
+    #[test]
+    fn three_field_addreg_value_is_empty_sz_not_a_panic() {
+        let op = add_line(r#"HKCU,"Software\Acme","Empty""#, &HashMap::new())
+            .unwrap()
+            .unwrap();
+        match op {
+            LineOp::Value(path, value) => {
+                assert_eq!(path.sub, "Software\\Acme");
+                assert_eq!(value.name, ValueName::Named("Empty".into()));
+                assert_eq!(value.data, RegData::Sz(String::new()));
+            }
+            _ => panic!("three-field AddReg row must create an empty value"),
+        }
     }
 }

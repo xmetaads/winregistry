@@ -1228,7 +1228,7 @@ fn strict_core_schemas_reject_unknown_fields_and_wrong_types() {
 #[test]
 fn real_dual_view_copy_plan_result_validates_strictly() {
     let schema: Value =
-        serde_json::from_slice(&std::fs::read(root().join("copy-plan-result-v1.json")).unwrap())
+        serde_json::from_slice(&std::fs::read(root().join("copy-plan-result-v2.json")).unwrap())
             .unwrap();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_regx"));
     let id = std::process::id();

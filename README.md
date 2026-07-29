@@ -6,7 +6,7 @@ CRT, no installer, no runtime dependency.
 
 ```
 cargo build --release      # -> target\release\regx.exe
-cargo test                 # 324 tests, including live-registry round trips
+cargo test                 # 325 tests, including live-registry round trips
 cargo run --example generate-man -- target\man
 cargo run --release --example benchmark-large -- target\release\regx.exe 5000
 cargo test --manifest-path fuzz\Cargo.toml --test seed_corpus
