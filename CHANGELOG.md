@@ -25,11 +25,11 @@ major version bump:
 Human-readable stdout and stderr text is *not* part of the contract. Parse the
 JSON.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-07-29
 
-The planned first binary release. Everything below was written after `0.1.0`
-and has not yet been published; tagging it as `0.1.0` would ship the older
-section's notes and silently drop all of it.
+The first binary release. Everything below was developed after `0.1.0`; the
+`v0.2.0` tag binds these notes to the matching Cargo package and release
+artifacts.
 
 ### Added
 
