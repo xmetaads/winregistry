@@ -20,6 +20,8 @@ pub struct Conflict {
     pub last_line: usize,
     pub old: String,
     pub new: String,
+    pub old_exact: Option<ValueEntry>,
+    pub new_exact: Option<ValueEntry>,
 }
 
 #[derive(Debug, Default)]
@@ -44,6 +46,18 @@ pub fn coalesce(keys: Vec<KeyBlock>) -> (Vec<KeyBlock>, CoalesceReport) {
         report.blocks_merged += 1;
 
         if block.delete {
+            if !existing.delete {
+                report.conflicts.push(Conflict {
+                    path: existing.path.to_string(),
+                    value: "(key)".into(),
+                    first_line: existing.line,
+                    last_line: block.line,
+                    old: "key present".into(),
+                    new: "delete key".into(),
+                    old_exact: None,
+                    new_exact: None,
+                });
+            }
             // `[-KEY]` after value writes: the delete wins and discards them,
             // exactly as regedit applies the file top-to-bottom.
             existing.delete = true;
@@ -51,6 +65,16 @@ pub fn coalesce(keys: Vec<KeyBlock>) -> (Vec<KeyBlock>, CoalesceReport) {
             continue;
         }
         if existing.delete {
+            report.conflicts.push(Conflict {
+                path: existing.path.to_string(),
+                value: "(key)".into(),
+                first_line: existing.line,
+                last_line: block.line,
+                old: "delete key".into(),
+                new: "create key".into(),
+                old_exact: None,
+                new_exact: None,
+            });
             // Re-created after a delete: the key is dropped then repopulated.
             existing.delete = false;
             existing.values.clear();
@@ -71,6 +95,8 @@ pub fn coalesce(keys: Vec<KeyBlock>) -> (Vec<KeyBlock>, CoalesceReport) {
                             last_line: v.line,
                             old: prev.data.preview(),
                             new: v.data.preview(),
+                            old_exact: Some(prev.clone()),
+                            new_exact: Some(v.clone()),
                         });
                     }
                     *prev = v;
@@ -173,19 +199,23 @@ mod tests {
     fn delete_block_resets_earlier_values() {
         let mut del = key("HKCU\\A", &[]);
         del.delete = true;
-        let (out, _) = coalesce(vec![key("HKCU\\A", &[("x", 1)]), del]);
+        let (out, report) = coalesce(vec![key("HKCU\\A", &[("x", 1)]), del]);
         assert_eq!(out.len(), 1);
         assert!(out[0].delete);
         assert!(out[0].values.is_empty());
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].value, "(key)");
     }
 
     #[test]
     fn recreate_after_delete_clears_the_delete() {
         let mut del = key("HKCU\\A", &[]);
         del.delete = true;
-        let (out, _) = coalesce(vec![del, key("HKCU\\A", &[("x", 1)])]);
+        let (out, report) = coalesce(vec![del, key("HKCU\\A", &[("x", 1)])]);
         assert!(!out[0].delete);
         assert_eq!(out[0].values.len(), 1);
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].value, "(key)");
     }
 
     #[test]

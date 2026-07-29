@@ -1,0 +1,2220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winregistry.org/schemas/cli-output-v1.json",
+  "title": "regx command output contracts v1",
+  "description": "Select the definition named by x-regx-command-map. Streaming watch output validates one event per line.",
+  "x-regx-schema-version": 1,
+  "x-regx-command-map": {
+    "--self-check": "#/$defs/selfCheck",
+    "apply-copy-plan": "https://winregistry.org/schemas/copy-plan-result-v2.json",
+    "apply-plan": "#/$defs/viewApply",
+    "audit": "#/$defs/audit",
+    "backup": "#/$defs/backup",
+    "batch": "https://winregistry.org/schemas/batch-result-v1.json",
+    "copy": "#/$defs/copyMove",
+    "copy-value": "#/$defs/valueCopyMove",
+    "delete": "#/$defs/viewApply",
+    "diff": "#/$defs/diff",
+    "discover": "#/$defs/discover",
+    "export": "#/$defs/registryDataOrExportStatus",
+    "fingerprint": "#/$defs/fingerprint",
+    "formats": "#/$defs/formats",
+    "hive batch": "https://winregistry.org/schemas/batch-result-v1.json",
+    "hive delete": "#/$defs/hiveApply",
+    "hive copy": "#/$defs/hiveCopyMove",
+    "hive diff": "#/$defs/diff",
+    "hive export": "#/$defs/hiveExport",
+    "hive fingerprint": "#/$defs/hiveFingerprint",
+    "hive import": "#/$defs/hiveApply",
+    "hive undo": "#/$defs/hiveUndoApply",
+    "hive copy-value": "#/$defs/hiveValueCopyMove",
+    "hive info": "#/$defs/hiveInfo",
+    "hive ls": "#/$defs/hiveList",
+    "hive permissions": "#/$defs/hivePermissions",
+    "hive probe": "#/$defs/hiveProbe",
+    "hive query": "#/$defs/queryData",
+    "hive search": "#/$defs/search",
+    "hive stats": "#/$defs/hiveStats",
+    "hive set": "#/$defs/hiveApply",
+    "hive sync": "#/$defs/hiveSync",
+    "hive move": "#/$defs/hiveCopyMove",
+    "hive move-value": "#/$defs/hiveValueCopyMove",
+    "import": "#/$defs/viewApply",
+    "inspect": "#/$defs/inspect",
+    "ls": "#/$defs/list",
+    "move": "#/$defs/copyMove",
+    "move-value": "#/$defs/valueCopyMove",
+    "permissions": "#/$defs/permissions",
+    "plan": "#/$defs/plan",
+    "probe": "#/$defs/probe",
+    "query": "#/$defs/queryDataOrViews",
+    "restore": "#/$defs/restore",
+    "search": "#/$defs/search",
+    "stats": "#/$defs/stats",
+    "set": "#/$defs/viewApply",
+    "sync": "#/$defs/viewApply",
+    "undo": "#/$defs/undoApply",
+    "validate": "#/$defs/validate",
+    "watch": "#/$defs/watchEvent"
+  },
+  "$defs": {
+    "nonNegative": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "problem": {
+      "type": "object",
+      "required": ["problem"],
+      "properties": {
+        "problem": { "type": "string" }
+      }
+    },
+    "apply": {
+      "type": "object",
+      "required": [
+        "keysCreated",
+        "keysDeleted",
+        "valuesSet",
+        "valuesDeleted",
+        "failures"
+      ],
+      "properties": {
+        "keysCreated": { "$ref": "#/$defs/nonNegative" },
+        "keysDeleted": { "$ref": "#/$defs/nonNegative" },
+        "valuesSet": { "$ref": "#/$defs/nonNegative" },
+        "valuesDeleted": { "$ref": "#/$defs/nonNegative" },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "problem"],
+            "properties": {
+              "target": { "type": "string" },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "viewApply": {
+      "type": "object",
+      "required": ["views"],
+      "properties": {
+        "atomic": { "type": "boolean" },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "undo", "undoBytes", "undoSha256", "apply", "rolledBack", "rollback"],
+            "properties": {
+              "view": { "enum": ["native", "32", "64"] },
+              "undo": { "type": ["string", "null"] },
+              "undoBytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "undoSha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "apply": {
+                "oneOf": [
+                  { "$ref": "#/$defs/apply" },
+                  { "type": "null" }
+                ]
+              },
+              "rolledBack": { "type": "boolean" },
+              "rollback": {
+                "oneOf": [
+                  { "$ref": "#/$defs/apply" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "undoApply": {
+      "type": "object",
+      "required": ["atomic", "views"],
+      "properties": {
+        "atomic": { "const": true },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["view", "redo", "redoBytes", "redoSha256", "apply", "rolledBack", "rollback"],
+            "properties": {
+              "view": { "enum": ["native", "32", "64"] },
+              "redo": { "type": ["string", "null"] },
+              "redoBytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "redoSha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "apply": {
+                "oneOf": [
+                  { "$ref": "#/$defs/apply" },
+                  { "type": "null" }
+                ]
+              },
+              "rolledBack": { "type": "boolean" },
+              "rollback": {
+                "oneOf": [
+                  { "$ref": "#/$defs/apply" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "registryValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["name", "data"],
+          "properties": {
+            "name": { "type": "string" },
+            "data": { "type": "null" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["name", "type", "data"],
+          "properties": {
+            "name": { "type": "string" },
+            "type": { "const": "REG_SZ" },
+            "data": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["name", "type", "data"],
+          "properties": {
+            "name": { "type": "string" },
+            "type": { "const": "REG_DWORD" },
+            "data": { "$ref": "#/$defs/nonNegative" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["name", "typeId", "raw"],
+          "properties": {
+            "name": { "type": "string" },
+            "typeId": { "$ref": "#/$defs/nonNegative" },
+            "raw": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "registryKey": {
+      "type": "object",
+      "required": ["path", "delete", "values"],
+      "properties": {
+        "path": { "type": "string" },
+        "delete": { "type": "boolean" },
+        "values": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/registryValue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "registryData": {
+      "type": "object",
+      "required": ["keys"],
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/registryKey" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "queryValue": {
+      "type": "object",
+      "required": ["name", "type", "data", "exact"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "data": { "type": "string" },
+        "exact": { "$ref": "#/$defs/registryValue" }
+      },
+      "additionalProperties": false
+    },
+    "queryData": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "values"],
+        "properties": {
+          "key": { "type": "string" },
+          "values": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/queryValue" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "queryDataOrViews": {
+      "oneOf": [
+        { "$ref": "#/$defs/queryData" },
+        {
+          "type": "object",
+          "required": ["path", "views", "failures"],
+          "properties": {
+            "path": { "type": "string" },
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "keys", "incomplete"],
+                "properties": {
+                  "view": { "enum": ["32", "64"] },
+                  "keys": { "$ref": "#/$defs/queryData" },
+                  "incomplete": { "type": "boolean" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "error"],
+                "properties": {
+                  "view": { "enum": ["32", "64"] },
+                  "error": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "list": {
+      "type": "object",
+      "required": ["path", "computer", "recursive", "include", "exclude", "limit", "views", "failures"],
+      "properties": {
+        "path": { "type": "string" },
+        "computer": { "type": ["string", "null"] },
+        "recursive": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "limit": { "type": "integer", "minimum": 1 },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "keys", "skipped", "truncated"],
+            "properties": {
+              "view": { "enum": ["native", "32", "64"] },
+              "keys": { "type": "array", "items": { "type": "string" } },
+              "truncated": { "type": "boolean" },
+              "skipped": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "problem"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "problem": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "error"],
+            "properties": {
+              "view": { "enum": ["native", "32", "64"] },
+              "error": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "statsFields": {
+      "type": "object",
+      "required": ["keys", "values", "keyDeletes", "valueDeletes", "maxDepth", "payloadBytes", "types", "conflicts", "incomplete", "matched"],
+      "properties": {
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "keyDeletes": { "$ref": "#/$defs/nonNegative" },
+        "valueDeletes": { "$ref": "#/$defs/nonNegative" },
+        "maxDepth": { "$ref": "#/$defs/nonNegative" },
+        "payloadBytes": { "$ref": "#/$defs/nonNegative" },
+        "types": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/nonNegative" }
+        },
+        "conflicts": { "$ref": "#/$defs/nonNegative" },
+        "incomplete": { "type": "boolean" },
+        "matched": { "type": "boolean" }
+      }
+    },
+    "statsView": {
+      "type": "object",
+      "required": ["view", "keys", "values", "keyDeletes", "valueDeletes", "maxDepth", "payloadBytes", "types", "conflicts", "incomplete", "matched", "skipped"],
+      "properties": {
+        "view": { "enum": ["native", "32", "64"] },
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "keyDeletes": { "$ref": "#/$defs/nonNegative" },
+        "valueDeletes": { "$ref": "#/$defs/nonNegative" },
+        "maxDepth": { "$ref": "#/$defs/nonNegative" },
+        "payloadBytes": { "$ref": "#/$defs/nonNegative" },
+        "types": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/nonNegative" }
+        },
+        "conflicts": { "$ref": "#/$defs/nonNegative" },
+        "incomplete": { "type": "boolean" },
+        "matched": { "type": "boolean" },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "problem"],
+            "properties": {
+              "path": { "type": "string" },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "stats": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/statsFields" },
+            {
+              "type": "object",
+              "required": ["source", "format", "rootAs", "include", "exclude", "includeValues", "excludeValues"],
+              "properties": {
+                "source": { "type": "string" },
+                "format": { "type": "string" },
+                "rootAs": { "type": "null" },
+                "include": { "type": "array", "items": { "type": "string" } },
+                "exclude": { "type": "array", "items": { "type": "string" } },
+                "includeValues": { "type": "array", "items": { "type": "string" } },
+                "excludeValues": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["source", "computer", "rootAs", "include", "exclude", "includeValues", "excludeValues", "views", "failures"],
+          "properties": {
+            "source": { "type": "string" },
+            "computer": { "type": ["string", "null"] },
+            "rootAs": { "type": ["string", "null"] },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } },
+            "views": { "type": "array", "items": { "$ref": "#/$defs/statsView" } },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "error"],
+                "properties": {
+                  "view": { "enum": ["native", "32", "64"] },
+                  "error": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "fingerprintView": {
+      "type": "object",
+      "required": ["view", "sha256", "conflicts", "incomplete", "expected", "matches", "matched", "keys", "values", "skipped"],
+      "properties": {
+        "view": { "enum": ["native", "32", "64"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "conflicts": { "$ref": "#/$defs/nonNegative" },
+        "incomplete": { "type": "boolean" },
+        "expected": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "matches": { "type": ["boolean", "null"] },
+        "matched": { "type": "boolean" },
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "problem"],
+            "properties": {
+              "path": { "type": "string" },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "fingerprint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["source", "format", "rootAs", "canonicalVersion", "algorithm", "sha256", "conflicts", "incomplete", "expected", "matches", "matched", "keys", "values", "include", "exclude", "includeValues", "excludeValues"],
+          "properties": {
+            "source": { "type": "string" },
+            "format": { "type": "string" },
+            "rootAs": { "type": "null" },
+            "canonicalVersion": { "const": 1 },
+            "algorithm": { "const": "sha256" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "conflicts": { "$ref": "#/$defs/nonNegative" },
+            "incomplete": { "type": "boolean" },
+            "expected": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "matches": { "type": ["boolean", "null"] }
+            ,"matched": { "type": "boolean" },
+            "keys": { "$ref": "#/$defs/nonNegative" },
+            "values": { "$ref": "#/$defs/nonNegative" },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["source", "computer", "rootAs", "canonicalVersion", "algorithm", "include", "exclude", "includeValues", "excludeValues", "views", "failures"],
+          "properties": {
+            "source": { "type": "string" },
+            "computer": { "type": ["string", "null"] },
+            "rootAs": { "type": ["string", "null"] },
+            "canonicalVersion": { "const": 1 },
+            "algorithm": { "const": "sha256" },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } },
+            "views": { "type": "array", "items": { "$ref": "#/$defs/fingerprintView" } },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "error"],
+                "properties": {
+                  "view": { "enum": ["native", "32", "64"] },
+                  "error": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "exportStatus": {
+      "type": "object",
+      "required": ["source", "computer", "rootAs", "format", "recursive", "include", "exclude", "includeValues", "excludeValues", "file", "dryRun", "keys", "values", "skipped", "bytes", "sha256"],
+      "properties": {
+        "source": { "type": "string" },
+        "computer": { "type": ["string", "null"] },
+        "rootAs": { "type": ["string", "null"] },
+        "format": { "enum": ["reg", "json", "csv", "pol"] },
+        "recursive": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "includeValues": { "type": "array", "items": { "type": "string" } },
+        "excludeValues": { "type": "array", "items": { "type": "string" } },
+        "file": { "type": "string" },
+        "dryRun": { "type": "boolean" },
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "skipped": { "$ref": "#/$defs/nonNegative" },
+        "bytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "registryDataOrExportStatus": {
+      "oneOf": [
+        { "$ref": "#/$defs/registryData" },
+        { "$ref": "#/$defs/exportStatus" },
+        { "$ref": "#/$defs/exportBoth" }
+      ]
+    },
+    "exportBoth": {
+      "type": "object",
+      "required": ["source", "computer", "rootAs", "format", "recursive", "include", "exclude", "includeValues", "excludeValues", "views", "failures"],
+      "properties": {
+        "source": { "type": "string" },
+        "computer": { "type": ["string", "null"] },
+        "rootAs": { "type": ["string", "null"] },
+        "format": { "enum": ["reg", "json", "csv", "pol"] },
+        "recursive": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "includeValues": { "type": "array", "items": { "type": "string" } },
+        "excludeValues": { "type": "array", "items": { "type": "string" } },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["view", "file", "dryRun", "keys", "values", "skipped", "data", "bytes", "sha256"],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "file": { "type": ["string", "null"] },
+              "dryRun": { "type": "boolean" },
+              "keys": { "$ref": "#/$defs/nonNegative" },
+              "values": { "$ref": "#/$defs/nonNegative" },
+              "skipped": { "$ref": "#/$defs/nonNegative" },
+              "data": {
+                "oneOf": [
+                  { "$ref": "#/$defs/registryData" },
+                  { "type": "null" }
+                ]
+              },
+              "bytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "sha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "problem"],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "validate": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "valid",
+          "written",
+          "dryRun",
+          "keys",
+          "values",
+          "diagnostics",
+          "fixes",
+          "unfixable",
+          "repairedData",
+          "output",
+          "bytes",
+          "sha256",
+          "backup",
+          "backupBytes",
+          "backupSha256"
+        ],
+        "properties": {
+          "file": { "type": "string" },
+          "valid": { "type": "boolean" },
+          "written": { "type": "boolean" },
+          "dryRun": { "type": "boolean" },
+          "keys": { "$ref": "#/$defs/nonNegative" },
+          "values": { "$ref": "#/$defs/nonNegative" },
+          "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/validationDiagnostic" } },
+          "fixes": { "type": "array", "items": { "$ref": "#/$defs/validationFix" } },
+          "unfixable": { "type": "array", "items": { "$ref": "#/$defs/validationUnfixable" } },
+          "repairedData": {
+            "oneOf": [
+              { "$ref": "#/$defs/registryData" },
+              { "type": "null" }
+            ]
+          },
+          "output": { "type": ["string", "null"] },
+          "bytes": {
+            "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+          },
+          "sha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "backup": { "type": ["string", "null"] },
+          "backupBytes": {
+            "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+          },
+          "backupSha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "validationDiagnostic": {
+      "type": "object",
+      "required": ["line", "severity", "message"],
+      "properties": {
+        "line": { "$ref": "#/$defs/nonNegative" },
+        "severity": { "enum": ["warning", "error"] },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "validationFix": {
+      "type": "object",
+      "required": ["line", "class", "message"],
+      "properties": {
+        "line": { "$ref": "#/$defs/nonNegative" },
+        "class": { "enum": ["safe", "lossy"] },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "validationUnfixable": {
+      "type": "object",
+      "required": ["line", "message"],
+      "properties": {
+        "line": { "$ref": "#/$defs/nonNegative" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "inspect": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "format", "dialect", "encoding", "keys", "values", "keyDeletes", "hives", "notes", "losses", "conflicts", "data"],
+        "properties": {
+          "file": { "type": "string" },
+          "format": { "type": "string" },
+          "dialect": {
+            "oneOf": [
+              { "enum": ["Windows Registry Editor Version 5.00", "REGEDIT4"] },
+              { "type": "null" }
+            ]
+          },
+          "encoding": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "keys": { "$ref": "#/$defs/nonNegative" },
+          "values": { "$ref": "#/$defs/nonNegative" },
+          "keyDeletes": { "$ref": "#/$defs/nonNegative" },
+          "hives": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "array", "items": { "type": "string" } },
+          "losses": { "type": "array", "items": { "type": "string" } },
+          "conflicts": { "type": "array", "items": { "$ref": "#/$defs/inspectConflict" } },
+          "data": { "$ref": "#/$defs/registryData" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "inspectConflict": {
+      "type": "object",
+      "required": ["path", "value", "firstLine", "lastLine", "old", "new", "oldExact", "newExact"],
+      "properties": {
+        "path": { "type": "string" },
+        "value": { "type": "string" },
+        "firstLine": { "$ref": "#/$defs/nonNegative" },
+        "lastLine": { "$ref": "#/$defs/nonNegative" },
+        "old": { "type": "string" },
+        "new": { "type": "string" },
+        "oldExact": {
+          "oneOf": [
+            { "$ref": "#/$defs/registryValue" },
+            { "type": "null" }
+          ]
+        },
+        "newExact": {
+          "oneOf": [
+            { "$ref": "#/$defs/registryValue" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "probe": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path", "computer", "exists", "readable", "writable", "creatable", "detail"],
+          "properties": {
+            "path": { "type": "string" },
+            "computer": { "type": ["string", "null"] },
+            "exists": { "type": "boolean" },
+            "readable": { "type": "boolean" },
+            "writable": { "type": "boolean" },
+            "creatable": { "type": "boolean" },
+            "detail": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["path", "computer", "views"],
+          "properties": {
+            "path": { "type": "string" },
+            "computer": { "type": ["string", "null"] },
+            "views": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["view", "exists", "readable", "writable", "creatable", "detail"],
+                "properties": {
+                  "view": { "enum": ["32", "64"] },
+                  "exists": { "type": "boolean" },
+                  "readable": { "type": "boolean" },
+                  "writable": { "type": "boolean" },
+                  "creatable": { "type": "boolean" },
+                  "detail": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "hiveProbe": {
+      "type": "object",
+      "required": ["subkey", "exists", "readable", "writable", "creatable", "detail"],
+      "properties": {
+        "subkey": { "type": "string" },
+        "exists": { "type": "boolean" },
+        "readable": { "type": "boolean" },
+        "writable": { "type": "boolean" },
+        "creatable": { "type": "boolean" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "hivePermissions": {
+      "type": "object",
+      "required": ["subkey", "views", "failures"],
+      "properties": {
+        "subkey": { "type": "string" },
+        "views": {
+          "type": "array",
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/permissionView" }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "error"],
+            "properties": {
+              "view": { "const": "native" },
+              "error": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "formats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["format", "typical", "notes"],
+        "properties": {
+          "format": { "type": "string" },
+          "typical": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "selfCheck": {
+      "type": "object",
+      "required": ["findings", "policy"],
+      "properties": {
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["area", "verdict", "detail"],
+            "properties": {
+              "area": { "type": "string" },
+              "verdict": { "enum": ["ok", "note", "warn"] },
+              "detail": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "policy": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "required": ["files", "prune", "redacted", "savedPlan", "savedPlanBytes", "savedPlanSha256", "redirect", "policy"],
+      "properties": {
+        "files": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "prune": { "type": "boolean" },
+        "redacted": { "type": "boolean" },
+        "blocked": { "type": "boolean" },
+        "savedPlan": { "type": ["string", "null"] },
+        "savedPlanBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "savedPlanSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "redirect": {
+          "type": "object",
+          "required": ["skipped", "refused"],
+          "properties": {
+            "skipped": { "$ref": "#/$defs/nonNegative" },
+            "refused": { "$ref": "#/$defs/nonNegative" }
+          },
+          "additionalProperties": false
+        },
+        "policy": {
+          "type": "object",
+          "required": ["configured", "decisions"],
+          "properties": {
+            "configured": { "type": "boolean" },
+            "decisions": { "type": "array", "items": { "type": "string" } },
+            "denied": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/planDenied" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "rollback": { "$ref": "#/$defs/planRollback" },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/planChange" }
+        },
+        "failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/targetProblem" }
+        },
+        "views": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/planView" }
+        }
+      },
+      "oneOf": [
+        { "required": ["blocked", "rollback", "changes", "failures"] },
+        { "required": ["views"] }
+      ],
+      "additionalProperties": false
+    },
+    "targetProblem": {
+      "type": "object",
+      "required": ["target", "problem"],
+      "properties": {
+        "target": { "type": "string" },
+        "problem": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "planDenied": {
+      "type": "object",
+      "required": ["path", "rule"],
+      "properties": {
+        "path": { "type": "string" },
+        "rule": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "planData": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["redacted", "sha256"],
+          "properties": {
+            "redacted": { "const": true },
+            "sha256": { "type": "string", "minLength": 64 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "data", "exact"],
+          "properties": {
+            "type": { "type": "string" },
+            "data": { "type": "string" },
+            "exact": { "$ref": "#/$defs/registryValue" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "planChange": {
+      "type": "object",
+      "required": ["op", "path", "name", "before", "after"],
+      "properties": {
+        "op": { "enum": ["key.create", "key.delete", "value.set", "value.delete"] },
+        "path": { "type": "string" },
+        "name": { "type": ["string", "null"] },
+        "before": { "$ref": "#/$defs/planData" },
+        "after": { "$ref": "#/$defs/planData" }
+      },
+      "additionalProperties": false
+    },
+    "planRollback": {
+      "type": "object",
+      "required": ["path", "complete", "restoredValues", "newKeys", "unreadable"],
+      "properties": {
+        "path": { "type": "string" },
+        "complete": { "type": "boolean" },
+        "restoredValues": { "$ref": "#/$defs/nonNegative" },
+        "newKeys": { "$ref": "#/$defs/nonNegative" },
+        "unreadable": { "$ref": "#/$defs/nonNegative" }
+      },
+      "additionalProperties": false
+    },
+    "planView": {
+      "type": "object",
+      "required": ["view", "blocked", "denied", "rollback", "changes", "failures"],
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "blocked": { "type": "boolean" },
+        "denied": { "type": "array", "items": { "$ref": "#/$defs/planDenied" } },
+        "rollback": { "$ref": "#/$defs/planRollback" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/planChange" } },
+        "failures": { "type": "array", "items": { "$ref": "#/$defs/targetProblem" } }
+      },
+      "additionalProperties": false
+    },
+    "copyMove": {
+      "type": "object",
+      "required": ["operation", "source", "destination"],
+      "properties": {
+        "operation": { "enum": ["copy", "move"] },
+        "source": { "type": "string" },
+        "destination": { "type": "string" },
+        "view": { "enum": ["native", "32", "64"] },
+        "sourceComputer": { "type": ["string", "null"] },
+        "plan": { "type": "string" },
+        "planBytes": { "$ref": "#/$defs/nonNegative" },
+        "planSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sourceDigest": { "type": "string" },
+        "currentDigest": { "type": "string" },
+        "saved": { "const": true },
+        "overwrite": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "backup": { "type": "string" },
+        "backupBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "backupSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "copy": { "$ref": "#/$defs/apply" },
+        "removeSource": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "views": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/copyMoveView" }
+        }
+      },
+      "oneOf": [
+        { "required": ["view", "sourceComputer", "plan", "planBytes", "planSha256", "sourceDigest", "currentDigest", "saved"] },
+        { "required": ["overwrite", "dryRun", "backup", "backupBytes", "backupSha256", "copy", "removeSource", "rolledBack", "rollback"] },
+        { "required": ["views"] }
+      ],
+      "additionalProperties": false
+    },
+    "copyMoveView": {
+      "type": "object",
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "plan": { "type": "string" },
+        "planBytes": { "$ref": "#/$defs/nonNegative" },
+        "planSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "saved": { "const": true },
+        "backup": { "type": "string" },
+        "backupBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "backupSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "copy": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] },
+        "removeSource": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] },
+        "rolledBack": { "type": "boolean" },
+        "rollback": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] }
+      },
+      "oneOf": [
+        { "required": ["view", "plan", "planBytes", "planSha256", "saved"] },
+        { "required": ["view", "backup", "backupBytes", "backupSha256", "copy", "removeSource", "rolledBack", "rollback"] }
+      ],
+      "additionalProperties": false
+    },
+    "valueCopyMove": {
+      "type": "object",
+      "required": ["operation", "source", "sourceValue", "destination", "destinationValue"],
+      "properties": {
+        "operation": { "enum": ["copy-value", "move-value"] },
+        "source": { "type": "string" },
+        "sourceValue": { "type": "string" },
+        "sourceComputer": { "type": ["string", "null"] },
+        "destination": { "type": "string" },
+        "destinationValue": { "type": "string" },
+        "overwrite": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "saved": { "const": true },
+        "plans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/copyMovePlanArtifact" }
+        },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/copyMoveView" }
+        }
+      },
+      "oneOf": [
+        { "required": ["sourceComputer", "overwrite", "dryRun", "views"] },
+        { "required": ["plans", "saved"] }
+      ],
+      "additionalProperties": false
+    },
+    "copyMovePlanArtifact": {
+      "type": "object",
+      "required": ["view", "plan", "planBytes", "planSha256"],
+      "properties": {
+        "view": { "enum": ["native", "32", "64"] },
+        "plan": { "type": "string" },
+        "planBytes": { "$ref": "#/$defs/nonNegative" },
+        "planSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "hiveValueCopyMove": {
+      "type": "object",
+      "required": ["undo", "undoBytes", "undoSha256", "copy", "removeSource", "rolledBack", "rollback"],
+      "properties": {
+        "undo": { "type": ["string", "null"] },
+        "undoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "undoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "copy": { "$ref": "#/$defs/apply" },
+        "removeSource": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveApply": {
+      "type": "object",
+      "required": ["undo", "undoBytes", "undoSha256", "apply", "rolledBack", "rollback"],
+      "properties": {
+        "undo": { "type": ["string", "null"] },
+        "undoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "undoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "apply": { "$ref": "#/$defs/apply" },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveUndoApply": {
+      "type": "object",
+      "required": ["redo", "redoBytes", "redoSha256", "apply", "rolledBack", "rollback"],
+      "properties": {
+        "redo": { "type": ["string", "null"] },
+        "redoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "redoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "apply": { "$ref": "#/$defs/apply" },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveCopyMove": {
+      "type": "object",
+      "required": [
+        "operation",
+        "source",
+        "destination",
+        "overwrite",
+        "dryRun",
+        "undo",
+        "undoBytes",
+        "undoSha256",
+        "copy",
+        "removeSource",
+        "rolledBack",
+        "rollback"
+      ],
+      "properties": {
+        "operation": { "enum": ["copy", "move"] },
+        "source": { "type": "string" },
+        "destination": { "type": "string" },
+        "overwrite": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "undo": { "type": ["string", "null"] },
+        "undoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "undoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "copy": { "$ref": "#/$defs/apply" },
+        "removeSource": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveSync": {
+      "type": "object",
+      "required": [
+        "prune",
+        "pruneKeys",
+        "dryRun",
+        "undo",
+        "undoBytes",
+        "undoSha256",
+        "apply",
+        "rolledBack",
+        "rollback"
+      ],
+      "properties": {
+        "prune": { "type": "boolean" },
+        "pruneKeys": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "undo": { "type": ["string", "null"] },
+        "undoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "undoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "apply": { "$ref": "#/$defs/apply" },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "backup": {
+      "type": "object",
+      "required": ["source", "sourceComputer", "dryRun"],
+      "properties": {
+        "source": { "type": "string" },
+        "sourceComputer": { "type": ["string", "null"] },
+        "file": { "type": "string" },
+        "dryRun": { "type": "boolean" },
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "bytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "views": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["view", "file", "keys", "values", "bytes", "sha256"],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "file": { "type": "string" },
+              "keys": { "$ref": "#/$defs/nonNegative" },
+              "values": { "$ref": "#/$defs/nonNegative" },
+              "bytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "sha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "oneOf": [
+        { "required": ["file", "keys", "values", "bytes", "sha256"] },
+        { "required": ["views"] }
+      ],
+      "additionalProperties": false
+    },
+    "restore": {
+      "type": "object",
+      "required": ["file", "destination", "overwrite", "dryRun"],
+      "properties": {
+        "file": { "type": "string" },
+        "destination": { "type": "string" },
+        "overwrite": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "undo": { "type": "string" },
+        "undoBytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "undoSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "apply": { "$ref": "#/$defs/apply" },
+        "rolledBack": { "type": "boolean" },
+        "rollback": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] },
+        "views": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["view", "file", "undo", "undoBytes", "undoSha256", "apply", "rolledBack", "rollback"],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "file": { "type": "string" },
+              "undo": { "type": "string" },
+              "undoBytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "undoSha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "apply": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] },
+              "rolledBack": { "type": "boolean" },
+              "rollback": { "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "oneOf": [
+        { "required": ["undo", "undoBytes", "undoSha256", "apply", "rolledBack", "rollback"] },
+        { "required": ["views"] }
+      ],
+      "additionalProperties": false
+    },
+    "permissionView": {
+      "type": "object",
+      "required": ["view", "ownerSid", "inheritanceEnabled", "sddl", "effective"],
+      "properties": {
+        "view": { "enum": ["native", "32", "64"] },
+        "ownerSid": { "type": "string" },
+        "inheritanceEnabled": { "type": "boolean" },
+        "sddl": { "type": "string" },
+        "effective": {
+          "type": "object",
+          "required": [
+            "queryValue",
+            "enumerateSubkeys",
+            "notify",
+            "setValue",
+            "createSubkey",
+            "delete"
+          ],
+          "properties": {
+            "queryValue": { "type": "boolean" },
+            "enumerateSubkeys": { "type": "boolean" },
+            "notify": { "type": "boolean" },
+            "setValue": { "type": "boolean" },
+            "createSubkey": { "type": "boolean" },
+            "delete": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "permissions": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["path", "computer", "views", "failures"],
+          "properties": {
+            "path": { "type": "string" },
+            "computer": { "type": ["string", "null"] },
+            "views": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/permissionView" }
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "error"],
+                "properties": {
+                  "view": { "enum": ["native", "32", "64"] },
+                  "error": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": [
+            "sourcePath",
+            "sourceComputer",
+            "targetPath",
+            "targetComputer",
+            "equal",
+            "views",
+            "failures"
+          ],
+          "properties": {
+            "sourcePath": { "type": "string" },
+            "sourceComputer": { "type": ["string", "null"] },
+            "targetPath": { "type": "string" },
+            "targetComputer": { "type": ["string", "null"] },
+            "equal": { "type": "boolean" },
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["view", "equal", "differences", "source", "target"],
+                "properties": {
+                  "view": { "enum": ["native", "32", "64"] },
+                  "equal": { "type": "boolean" },
+                  "differences": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "source": { "$ref": "#/$defs/permissionView" },
+                  "target": { "$ref": "#/$defs/permissionView" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["side", "view", "error"],
+                "properties": {
+                  "side": { "enum": ["source", "target"] },
+                  "view": { "enum": ["native", "32", "64"] },
+                  "error": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "audit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["file", "records", "sessions", "intact", "broken"],
+          "properties": {
+            "file": { "type": "string" },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "sessions": { "$ref": "#/$defs/nonNegative" },
+            "intact": { "type": "boolean" },
+            "broken": { "type": "array", "items": { "$ref": "#/$defs/auditLineProblem" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["files", "records", "sessions", "intact", "broken"],
+          "properties": {
+            "files": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "sessions": { "$ref": "#/$defs/nonNegative" },
+            "intact": { "type": "boolean" },
+            "broken": { "type": "array", "items": { "$ref": "#/$defs/auditSegmentProblem" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["file", "archive", "dryRun", "records", "archiveBytes", "archiveSha256", "eligible"],
+          "properties": {
+            "file": { "type": "string" },
+            "archive": { "type": "string" },
+            "dryRun": { "const": true },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "archiveBytes": { "type": "null" },
+            "archiveSha256": { "type": "null" },
+            "eligible": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["file", "archive", "dryRun", "records", "previousHash", "archiveBytes", "archiveSha256", "rotated"],
+          "properties": {
+            "file": { "type": "string" },
+            "archive": { "type": "string" },
+            "dryRun": { "const": false },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "previousHash": { "type": "string" },
+            "archiveBytes": { "$ref": "#/$defs/nonNegative" },
+            "archiveSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "rotated": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["file", "anchor", "dryRun", "records", "signed", "anchorBytes", "anchorSha256", "eligible"],
+          "properties": {
+            "file": { "type": "string" },
+            "anchor": { "type": "string" },
+            "dryRun": { "const": true },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "signed": { "type": "boolean" },
+            "anchorBytes": { "type": "null" },
+            "anchorSha256": { "type": "null" },
+            "eligible": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["file", "anchor", "dryRun", "records", "sha256", "tailHash", "signed", "anchorBytes", "anchorSha256", "written"],
+          "properties": {
+            "file": { "type": "string" },
+            "anchor": { "type": "string" },
+            "dryRun": { "const": false },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "sha256": { "type": "string", "minLength": 64 },
+            "tailHash": { "type": "string", "minLength": 64 },
+            "signed": { "type": "boolean" },
+            "anchorBytes": { "$ref": "#/$defs/nonNegative" },
+            "anchorSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "written": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "file",
+            "anchor",
+            "records",
+            "chainIntact",
+            "anchorMatches",
+            "intact",
+            "expectedSha256",
+            "actualSha256",
+            "expectedTailHash",
+            "actualTailHash",
+            "signed",
+            "signatureValid"
+          ],
+          "properties": {
+            "file": { "type": "string" },
+            "anchor": { "type": "string" },
+            "records": { "$ref": "#/$defs/nonNegative" },
+            "chainIntact": { "type": "boolean" },
+            "anchorMatches": { "type": "boolean" },
+            "intact": { "type": "boolean" },
+            "expectedSha256": { "type": "string", "minLength": 64 },
+            "actualSha256": { "type": "string", "minLength": 64 },
+            "expectedTailHash": { "type": "string", "minLength": 64 },
+            "actualTailHash": { "type": "string", "minLength": 64 },
+            "signed": { "type": "boolean" },
+            "signatureValid": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "auditLineProblem": {
+      "type": "object",
+      "required": ["line", "problem"],
+      "properties": {
+        "line": { "$ref": "#/$defs/nonNegative" },
+        "problem": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "auditSegmentProblem": {
+      "type": "object",
+      "required": ["segment", "problem"],
+      "properties": {
+        "segment": { "$ref": "#/$defs/nonNegative" },
+        "problem": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "diffChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "change", "path"],
+          "properties": {
+            "kind": { "const": "key" },
+            "change": { "enum": ["added", "modified", "removed"] },
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "change", "path", "name", "left", "right", "leftExact", "rightExact"],
+          "properties": {
+            "kind": { "const": "value" },
+            "change": { "enum": ["added", "modified", "removed"] },
+            "path": { "type": "string" },
+            "name": { "type": "string" },
+            "left": { "type": ["string", "null"] },
+            "right": { "type": ["string", "null"] },
+            "leftExact": {
+              "oneOf": [
+                { "$ref": "#/$defs/registryValue" },
+                { "type": "null" }
+              ]
+            },
+            "rightExact": {
+              "oneOf": [
+                { "$ref": "#/$defs/registryValue" },
+                { "type": "null" }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "diff": {
+      "type": "object",
+      "required": ["a", "computerA", "b", "computerB", "mapA", "mapB", "includeValues", "excludeValues"],
+      "properties": {
+        "a": { "type": "string" },
+        "computerA": { "type": ["string", "null"] },
+        "b": { "type": "string" },
+        "computerB": { "type": ["string", "null"] },
+        "mapA": { "type": ["string", "null"] },
+        "mapB": { "type": ["string", "null"] },
+        "incomplete": { "type": "boolean" },
+        "summaryOnly": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "includeValues": { "type": "array", "items": { "type": "string" } },
+        "excludeValues": { "type": "array", "items": { "type": "string" } },
+        "added": { "$ref": "#/$defs/nonNegative" },
+        "modified": { "$ref": "#/$defs/nonNegative" },
+        "removed": { "$ref": "#/$defs/nonNegative" },
+        "patch": { "type": ["string", "null"] },
+        "patchFormat": { "enum": ["reg", "json", "csv", "pol"] },
+        "patchWritten": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "bytes": {
+          "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diffChange" }
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "view",
+              "incomplete",
+              "added",
+              "modified",
+              "removed",
+              "patch",
+              "patchWritten",
+              "dryRun",
+              "bytes",
+              "sha256",
+              "changes"
+            ],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "incomplete": { "type": "boolean" },
+              "added": { "$ref": "#/$defs/nonNegative" },
+              "modified": { "$ref": "#/$defs/nonNegative" },
+              "removed": { "$ref": "#/$defs/nonNegative" },
+              "patch": { "type": ["string", "null"] },
+              "patchWritten": { "type": "boolean" },
+              "dryRun": { "type": "boolean" },
+              "bytes": {
+                "oneOf": [{ "$ref": "#/$defs/nonNegative" }, { "type": "null" }]
+              },
+              "sha256": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "changes": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/diffChange" }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["view", "side", "problem"],
+            "properties": {
+              "view": { "enum": ["32", "64"] },
+              "side": { "enum": ["a", "b"] },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "oneOf": [
+        { "required": ["added", "modified", "removed", "changes", "incomplete", "summaryOnly", "include", "exclude", "patch", "patchFormat", "patchWritten", "dryRun", "bytes", "sha256"] },
+        { "required": ["views", "failures", "summaryOnly", "include", "exclude", "patchFormat"] }
+      ],
+      "additionalProperties": false
+    },
+    "search": {
+      "type": "object",
+      "required": ["source", "remoteComputer", "query", "mode", "caseSensitive", "include", "exclude", "includeValues", "excludeValues"],
+      "properties": {
+        "source": { "type": "string" },
+        "remoteComputer": { "type": ["string", "null"] },
+        "query": { "type": "string" },
+        "mode": { "enum": ["substring", "glob", "regex"] },
+        "caseSensitive": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "includeValues": { "type": "array", "items": { "type": "string" } },
+        "excludeValues": { "type": "array", "items": { "type": "string" } },
+        "limit": { "$ref": "#/$defs/nonNegative" },
+        "truncated": { "type": "boolean" },
+        "incomplete": { "type": "boolean" },
+        "matches": { "type": "array", "items": { "$ref": "#/$defs/searchMatch" } },
+        "limitPerView": { "$ref": "#/$defs/nonNegative" },
+        "views": { "type": "array", "items": { "$ref": "#/$defs/searchView" } },
+        "failures": { "type": "array", "items": { "$ref": "#/$defs/viewProblem" } }
+      },
+      "oneOf": [
+        { "required": ["matches", "truncated", "incomplete", "limit"] },
+        { "required": ["views", "failures", "limitPerView"] }
+      ],
+      "additionalProperties": false
+    },
+    "searchMatch": {
+      "type": "object",
+      "required": ["field", "path", "name", "type", "data", "exact"],
+      "properties": {
+        "field": { "enum": ["key", "name", "type", "data"] },
+        "path": { "type": "string" },
+        "name": { "type": ["string", "null"] },
+        "type": { "type": ["string", "null"] },
+        "data": { "type": ["string", "null"] },
+        "exact": {
+          "oneOf": [
+            { "$ref": "#/$defs/registryValue" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "searchView": {
+      "type": "object",
+      "required": ["view", "truncated", "incomplete", "matches"],
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "truncated": { "type": "boolean" },
+        "incomplete": { "type": "boolean" },
+        "matches": { "type": "array", "items": { "$ref": "#/$defs/searchMatch" } }
+      },
+      "additionalProperties": false
+    },
+    "viewProblem": {
+      "type": "object",
+      "required": ["view", "problem"],
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "problem": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "watchEvent": {
+      "oneOf": [
+        { "$ref": "#/$defs/watchTimeout" },
+        { "$ref": "#/$defs/watchChange" },
+        { "$ref": "#/$defs/watchBothTimeout" },
+        { "$ref": "#/$defs/watchBothChange" }
+      ]
+    },
+    "watchBaseProperties": {
+      "type": "object"
+    },
+    "watchTimeout": {
+      "type": "object",
+      "required": ["sequence", "path", "timedOut", "recursive", "timeoutSeconds"],
+      "properties": {
+        "sequence": { "$ref": "#/$defs/nonNegative" },
+        "path": { "type": "string" },
+        "timedOut": { "const": true },
+        "recursive": { "type": "boolean" },
+        "timeoutSeconds": { "$ref": "#/$defs/nonNegative" }
+      },
+      "additionalProperties": false
+    },
+    "watchChangeItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "change", "path"],
+          "properties": {
+            "kind": { "const": "key" },
+            "change": { "enum": ["added", "modified", "removed"] },
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "change", "path", "name", "leftExact", "rightExact"],
+          "properties": {
+            "kind": { "const": "value" },
+            "change": { "enum": ["added", "modified", "removed"] },
+            "path": { "type": "string" },
+            "name": { "type": "string" },
+            "leftExact": {
+              "oneOf": [
+                { "$ref": "#/$defs/registryValue" },
+                { "type": "null" }
+              ]
+            },
+            "rightExact": {
+              "oneOf": [
+                { "$ref": "#/$defs/registryValue" },
+                { "type": "null" }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "watchChange": {
+      "type": "object",
+      "required": ["sequence", "path", "timedOut", "recursive", "keyRemoved", "incomplete", "added", "modified", "removed", "changes"],
+      "properties": {
+        "sequence": { "$ref": "#/$defs/nonNegative" },
+        "path": { "type": "string" },
+        "timedOut": { "const": false },
+        "recursive": { "type": "boolean" },
+        "keyRemoved": { "type": "boolean" },
+        "incomplete": { "type": "boolean" },
+        "added": { "$ref": "#/$defs/nonNegative" },
+        "modified": { "$ref": "#/$defs/nonNegative" },
+        "removed": { "$ref": "#/$defs/nonNegative" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/watchChangeItem" } }
+      },
+      "additionalProperties": false
+    },
+    "watchBothTimeout": {
+      "type": "object",
+      "required": ["sequence", "path", "timedOut", "recursive", "timeoutSeconds", "views"],
+      "properties": {
+        "sequence": { "$ref": "#/$defs/nonNegative" },
+        "path": { "type": "string" },
+        "timedOut": { "const": true },
+        "recursive": { "type": "boolean" },
+        "timeoutSeconds": { "$ref": "#/$defs/nonNegative" },
+        "views": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "enum": ["32", "64"] } }
+      },
+      "additionalProperties": false
+    },
+    "watchBothChange": {
+      "type": "object",
+      "required": ["sequence", "path", "timedOut", "recursive", "triggeredView", "views"],
+      "properties": {
+        "sequence": { "$ref": "#/$defs/nonNegative" },
+        "path": { "type": "string" },
+        "timedOut": { "const": false },
+        "recursive": { "type": "boolean" },
+        "triggeredView": { "enum": ["32", "64"] },
+        "views": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/watchViewEvent" } }
+      },
+      "additionalProperties": false
+    },
+    "watchViewEvent": {
+      "type": "object",
+      "required": ["view", "keyRemoved", "incomplete", "added", "modified", "removed", "changes"],
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "keyRemoved": { "type": "boolean" },
+        "incomplete": { "type": "boolean" },
+        "added": { "$ref": "#/$defs/nonNegative" },
+        "modified": { "$ref": "#/$defs/nonNegative" },
+        "removed": { "$ref": "#/$defs/nonNegative" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/watchChangeItem" } }
+      },
+      "additionalProperties": false
+    },
+    "discover": {
+      "type": "object",
+      "required": [
+        "executable",
+        "anchor",
+        "stem",
+        "policy",
+        "registryPointer",
+        "strict",
+        "notes",
+        "searched",
+        "risky",
+        "found"
+      ],
+      "properties": {
+        "executable": { "type": ["string", "null"] },
+        "anchor": { "type": "string" },
+        "stem": { "type": "string" },
+        "policy": { "type": "boolean" },
+        "registryPointer": { "type": "boolean" },
+        "strict": { "type": "boolean" },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "searched": { "type": "array", "items": { "type": "string" } },
+        "risky": { "$ref": "#/$defs/nonNegative" },
+        "found": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "resolvedPath",
+              "origin",
+              "rank",
+              "format",
+              "size",
+              "risks",
+              "riskDetails"
+            ],
+            "properties": {
+              "path": { "type": "string" },
+              "resolvedPath": { "type": "string" },
+              "origin": { "type": "string" },
+              "rank": { "$ref": "#/$defs/nonNegative" },
+              "format": { "type": ["string", "null"] },
+              "size": { "$ref": "#/$defs/nonNegative" },
+              "risks": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "CurrentDirectory",
+                    "UserWritable",
+                    "ReparsePoint",
+                    "EscapesAnchor",
+                    "NetworkPath",
+                    "WindowsFallback",
+                    "ShortNameAlias"
+                  ]
+                }
+              },
+              "riskDetails": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["kind", "explanation"],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "CurrentDirectory",
+                        "UserWritable",
+                        "ReparsePoint",
+                        "EscapesAnchor",
+                        "NetworkPath",
+                        "WindowsFallback",
+                        "ShortNameAlias"
+                      ]
+                    },
+                    "explanation": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveInfo": {
+      "type": "object",
+      "required": [
+        "file",
+        "size",
+        "signatureValid",
+        "readable",
+        "writable",
+        "detail",
+        "rootSubkeys"
+      ],
+      "properties": {
+        "file": { "type": "string" },
+        "size": { "$ref": "#/$defs/nonNegative" },
+        "signatureValid": { "type": "boolean" },
+        "readable": { "type": "boolean" },
+        "writable": { "type": "boolean" },
+        "detail": { "type": "string" },
+        "rootSubkeys": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "hiveList": {
+      "type": "object",
+      "required": ["subkey", "recursive", "include", "exclude", "limit", "truncated", "keys", "skipped"],
+      "properties": {
+        "subkey": { "type": "string" },
+        "recursive": { "type": "boolean" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "limit": { "type": "integer", "minimum": 1 },
+        "truncated": { "type": "boolean" },
+        "keys": { "type": "array", "items": { "type": "string" } },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "problem"],
+            "properties": {
+              "path": { "type": "string" },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveStats": {
+      "allOf": [
+        { "$ref": "#/$defs/statsFields" },
+        {
+          "type": "object",
+          "required": ["subkey", "rootAs", "include", "exclude", "includeValues", "excludeValues", "skipped"],
+          "properties": {
+            "subkey": { "type": "string" },
+            "rootAs": { "type": ["string", "null"] },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } },
+            "skipped": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["path", "problem"],
+                "properties": {
+                  "path": { "type": "string" },
+                  "problem": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "hiveFingerprint": {
+      "type": "object",
+      "required": ["subkey", "rootAs", "canonicalVersion", "algorithm", "sha256", "conflicts", "incomplete", "expected", "matches", "matched", "keys", "values", "include", "exclude", "includeValues", "excludeValues", "skipped"],
+      "properties": {
+        "subkey": { "type": "string" },
+        "rootAs": { "type": ["string", "null"] },
+        "canonicalVersion": { "const": 1 },
+        "algorithm": { "const": "sha256" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "conflicts": { "$ref": "#/$defs/nonNegative" },
+        "incomplete": { "type": "boolean" },
+        "expected": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "matches": { "type": ["boolean", "null"] },
+        "matched": { "type": "boolean" },
+        "keys": { "$ref": "#/$defs/nonNegative" },
+        "values": { "$ref": "#/$defs/nonNegative" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "includeValues": { "type": "array", "items": { "type": "string" } },
+        "excludeValues": { "type": "array", "items": { "type": "string" } },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "problem"],
+            "properties": {
+              "path": { "type": "string" },
+              "problem": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hiveExport": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["hive", "subkey", "rootAs", "format", "include", "exclude", "includeValues", "excludeValues", "data"],
+          "properties": {
+            "hive": { "type": "string" },
+            "subkey": { "type": "string" },
+            "rootAs": { "type": "string" },
+            "format": { "enum": ["reg", "json", "csv", "pol"] },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } },
+            "data": { "$ref": "#/$defs/registryData" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["hive", "subkey", "rootAs", "format", "include", "exclude", "includeValues", "excludeValues", "file", "dryRun", "keys", "values", "skipped"],
+          "properties": {
+            "hive": { "type": "string" },
+            "subkey": { "type": "string" },
+            "rootAs": { "type": "string" },
+            "format": { "enum": ["reg", "json", "csv", "pol"] },
+            "include": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } },
+            "includeValues": { "type": "array", "items": { "type": "string" } },
+            "excludeValues": { "type": "array", "items": { "type": "string" } },
+            "file": { "type": "string" },
+            "dryRun": { "type": "boolean" },
+            "keys": { "$ref": "#/$defs/nonNegative" },
+            "values": { "$ref": "#/$defs/nonNegative" },
+            "skipped": { "$ref": "#/$defs/nonNegative" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

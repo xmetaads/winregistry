@@ -10,7 +10,14 @@
 <meta property="og:url" content="https://www.winregistry.org/">
 <meta property="og:title" content="regx — Windows Registry CLI that never asks for admin">
 <meta property="og:description" content="Portable, single-file, standard-user Registry CLI. No UAC prompt, no installer, no runtime.">
+<meta property="og:image" content="https://www.winregistry.org/assets/img/og-winregistry.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1731">
+<meta property="og:image:height" content="909">
+<meta property="og:image:alt" content="WinRegistry — Safe registry automation for Windows">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://www.winregistry.org/assets/img/og-winregistry.png">
+<meta name="twitter:image:alt" content="WinRegistry — Safe registry automation for Windows">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
@@ -64,7 +71,7 @@
   <!-- ============================ HERO ============================ -->
   <section class="hero">
     <div class="wrap hero-inner">
-      <span class="badge"><span class="dot" aria-hidden="true"></span> v0.1 &middot; MIT licensed</span>
+      <span class="badge"><span class="dot" aria-hidden="true"></span> v0.2 source &middot; MIT licensed</span>
 
       <h1>The Registry CLI that never asks for admin.</h1>
 
@@ -107,10 +114,10 @@
       </div>
 
       <dl class="hero-facts">
-        <div><dt>851 KB</dt><dd>Single executable, static CRT</dd></div>
+        <div><dt>&lt;2 MiB</dt><dd>Single x64 executable, static CRT</dd></div>
         <div><dt>0</dt><dd>UAC prompts, ever</dd></div>
         <div><dt>0</dt><dd>Runtime dependencies</dd></div>
-        <div><dt>138</dt><dd>Tests, many against the live registry</dd></div>
+        <div><dt>324</dt><dd>Automated tests, including live registry</dd></div>
       </dl>
     </div>
   </section>
@@ -189,7 +196,7 @@
             </svg>
           </span>
           <h3>Automatic undo</h3>
-          <p>The registry has no transaction, so every import computes its own inverse first and writes it as a plain <code>.undo.reg</code>. If anything half-applies, rolling back is one command.</p>
+          <p>The registry has no transaction, so imports, syncs, saved plans, and ordered batch manifests compute their inverse first and write plain <code>.undo.reg</code> files. A failed batch restores every touched view to one shared pre-batch state.</p>
         </article>
 
         <article class="card reveal">
@@ -274,6 +281,21 @@
               <td><code>HKLM\SOFTWARE\Policies\*</code></td>
               <td><span class="pill pill-low"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Low</span></td>
               <td class="muted">SYSTEM services read HKLM only — <em>and</em> Group Policy refresh wipes the <code>HKCU\Software\Policies</code> subtree every ~90 minutes.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\…\Active Setup\Installed Components</code></td>
+              <td><span class="pill pill-refuse">Refuse</span></td>
+              <td class="muted">HKLM registers components while HKCU records per-user completion. Copying the path changes its meaning.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\…\Explorer\(User )Shell Folders</code></td>
+              <td><span class="pill pill-refuse">Refuse</span></td>
+              <td class="muted">Set the existing HKCU profile, preferably through the Windows Known Folder API. Machine and user value sets differ.</td>
+            </tr>
+            <tr>
+              <td><code>HKLM\…\Winlogon</code></td>
+              <td><span class="pill pill-refuse">Refuse</span></td>
+              <td class="muted"><code>Shell</code> and <code>Userinit</code> control machine logon. Redirecting them can break sign-in.</td>
             </tr>
             <tr>
               <td><code>HKLM\SYSTEM</code>, <code>SAM</code>, <code>SECURITY</code></td>
@@ -363,9 +385,9 @@ regx: unmounted D:\Backup\NTUSER.DAT</code></pre>
           </thead>
           <tbody>
             <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">regedit's own text format, UTF-16 or ANSI <code>REGEDIT4</code>.</td></tr>
-            <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">The Group Policy PReg binary, including the <code>**del.</code>, <code>**DeleteValues</code> and <code>**DeleteKeys</code> directives.</td></tr>
+            <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">The Group Policy PReg binary, including the <code>**del.</code>, <code>**DeleteValues</code> and <code>**DeleteKeys</code> directives. Writing enforces MS-GPREG ASCII identifiers and its 65,535-byte record limit.</td></tr>
             <tr><td><code>admx</code></td><td class="muted"><code>.admx</code> + <code>.adml</code></td><td class="muted">Policy templates. Emits the concrete enabled/disabled values; <code>&lt;elements&gt;</code> are reported rather than invented, because only an administrator knows what was typed into them.</td></tr>
-            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences: actions C/R/U/D, <code>&lt;Collection&gt;</code> traversed, disabled items skipped.</td></tr>
+            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences: exact registry actions are modeled; targeting, remove-on-scope-exit and context-dependent actions fail closed. <code>&lt;Collection&gt;</code> is traversed and an outer disabled preference type is skipped.</td></tr>
             <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code> and <code>[DelReg]</code> sections, with <code>[Strings]</code> token substitution.</td></tr>
             <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">A compact <code>{path: {name: value}}</code> map, or the explicit <code>{"keys": […]}</code> form.</td></tr>
             <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">A header row naming <code>key</code>, <code>name</code>, <code>type</code> and <code>data</code>, in any order.</td></tr>
@@ -434,7 +456,7 @@ Windows Registry Editor Version 5.00
         </li>
         <li>
           <h3>Apply, with a rollback already on disk</h3>
-          <p><code>regx import app.reg</code> writes <code>app.undo.reg</code> first, then applies. Reverting is <code>regx import app.undo.reg</code>.</p>
+          <p><code>regx import app.reg</code> writes a unique undo snapshot first, then applies. Revert it with <code>regx undo SNAPSHOT</code>; regx preserves a redo snapshot before restoring.</p>
         </li>
       </ol>
     </div>
@@ -450,7 +472,7 @@ Windows Registry Editor Version 5.00
           Delete the executable and nothing remains.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="/docs#install">Install regx</a>
+          <a class="btn btn-primary" href="/docs#install">Build regx</a>
           <a class="btn btn-secondary" href="https://github.com/xmetaads/winregistry">View source</a>
         </div>
       </div>
@@ -461,7 +483,7 @@ Windows Registry Editor Version 5.00
 
 <footer class="site-footer">
   <div class="wrap">
-    <p>regx is free software, MIT licensed. Windows 8.1 and later. x64 released; ARM64 builds in CI, untested on hardware.</p>
+    <p>regx is free software, MIT licensed. Windows 10 / Server 2016 or later. The first binary release is pending; x64 is tested and ARM64 is build-checked in CI.</p>
     <ul class="footer-links">
       <li><a href="/docs">Documentation</a></li>
       <li><a href="/docs#exit-codes">Exit codes</a></li>

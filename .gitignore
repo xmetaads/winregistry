@@ -1,6 +1,10 @@
 # Rust build output
 /target/
+/fuzz/target/
+/fuzz/artifacts/
 **/*.rs.bk
+__pycache__/
+*.py[cod]
 
 # Vendored third-party skill data (~7 MB). Not our code — reinstall with the
 # instructions in README.md rather than committing it.

@@ -6,9 +6,8 @@
 //! answered on every audit. ~90 lines, no unsafe, validated against the NIST
 //! vectors plus the standard million-`a` case in the tests below.
 //!
-//! This is not a general-purpose crypto module: there is no HMAC and no
-//! constant-time comparison, because neither is needed for integrity checking
-//! of a log the operator already owns.
+//! HMAC-SHA256 and constant-time comparison are included for signed detached
+//! audit anchors. This remains deliberately small and purpose-specific.
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -173,6 +172,70 @@ pub fn hash_hex(data: &[u8]) -> String {
     hex(&h.finish())
 }
 
+/// Hash a file without loading it into memory. Returns the exact number of
+/// bytes covered by the digest alongside its lowercase hexadecimal SHA-256.
+pub fn hash_file(path: &std::path::Path) -> std::io::Result<(u64, String)> {
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut bytes = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| std::io::Error::other("file length exceeds u64"))?;
+        hasher.update(&buffer[..read]);
+    }
+    Ok((bytes, hex(&hasher.finish())))
+}
+
+/// RFC 2104 HMAC over SHA-256.
+pub fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut block = [0u8; 64];
+    if key.len() > block.len() {
+        let mut key_hash = Sha256::new();
+        key_hash.update(key);
+        block[..32].copy_from_slice(&key_hash.finish());
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_pad = [0u8; 64];
+    let mut outer_pad = [0u8; 64];
+    for index in 0..64 {
+        inner_pad[index] = block[index] ^ 0x36;
+        outer_pad[index] = block[index] ^ 0x5c;
+    }
+    let mut inner = Sha256::new();
+    inner.update(&inner_pad);
+    inner.update(data);
+    let inner_hash = inner.finish();
+    let mut outer = Sha256::new();
+    outer.update(&outer_pad);
+    outer.update(&inner_hash);
+    outer.finish()
+}
+
+pub fn hmac_hex(key: &[u8], data: &[u8]) -> String {
+    hex(&hmac(key, data))
+}
+
+/// Compare authentication tags without revealing the first mismatching byte.
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (&left, &right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +269,15 @@ mod tests {
             hex(&h.finish()),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
+
+        let path =
+            std::env::temp_dir().join(format!("regx-sha256-file-{}.bin", std::process::id()));
+        let data = vec![0xa5; 131_071];
+        std::fs::write(&path, &data).unwrap();
+        let (bytes, digest) = hash_file(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(bytes, data.len() as u64);
+        assert_eq!(digest, hash_hex(&data));
     }
 
     #[test]
@@ -220,5 +292,17 @@ mod tests {
             h.update(&data[split..]);
             assert_eq!(hex(&h.finish()), expected, "split at {split}");
         }
+    }
+
+    #[test]
+    fn rfc_4231_hmac_vector_and_constant_time_compare() {
+        let key = [0x0bu8; 20];
+        let tag = hmac_hex(&key, b"Hi There");
+        assert_eq!(
+            tag,
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        assert!(constant_time_eq(tag.as_bytes(), tag.as_bytes()));
+        assert!(!constant_time_eq(tag.as_bytes(), b"different"));
     }
 }

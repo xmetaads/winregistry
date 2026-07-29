@@ -39,12 +39,19 @@ have the CLI.
 ## Before going live
 
 - [x] Repository links point at <https://github.com/xmetaads/winregistry>.
-- [ ] Point the download button at a real release asset once one exists — it
-      currently links to the install section of the docs.
-- [ ] Add an `og:image` (1200×630). The Open Graph tags are in place but there
-      is no image yet, so link previews will render text-only.
-- [ ] Confirm the stated figures still match the shipped binary: the hero
-      quotes 656 KB and 40 tests.
+- [ ] Point the build buttons at a real release asset once the first GitHub
+      release exists. Until then they deliberately link to the source-build
+      instructions.
+- [x] Add a large-card Open Graph image. The checked-in 1731×909 PNG uses the
+      standard 1.91:1 social-preview ratio and is referenced by Open Graph and
+      Twitter metadata.
+- [ ] Confirm the broad figures still match the shipped binary and test suite:
+      the hero says &lt;2 MiB and 324 tests; update both from measured release
+      output and the test inventory before shipping.
+- [ ] Run `python scripts/check_deployed_site.py` after deployment. It requires
+      the live HTML, CSS, scripts, social image, security headers, clean-URL
+      redirect and 404 response to match the reviewed repository state. A daily
+      and manually dispatchable GitHub workflow runs the same check.
 
 ## Deploying to Vercel
 
@@ -140,5 +147,10 @@ Verified: every text/background pair in both themes clears 4.5:1 (lowest is
 visible, `prefers-reduced-motion` is respected, zoom is not disabled, and wide
 tables scroll inside their own container rather than the page.
 
-**Not yet verified:** rendering has only been checked programmatically. Open the
-site at 375 / 768 / 1024 / 1440 px and tab through it before launch.
+Browser verification completed on 2026-07-29 at 375 / 768 / 1024 / 1440 px:
+both pages render without page-level overflow or broken images, desktop and
+mobile navigation work by mouse and keyboard, theme state persists, copy
+controls report completion, and documentation anchors land below the fixed
+header. The mobile/tablet table of contents is intentionally capped at half
+the viewport and scrolls internally, so it no longer pushes the document
+heading below an entire screen.

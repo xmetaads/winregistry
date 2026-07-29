@@ -480,11 +480,11 @@ pub fn current_user_sid() -> Option<String> {
         while *raw.add(n) != 0 {
             n += 1;
         }
-        let s = String::from_utf16_lossy(std::slice::from_raw_parts(raw, n));
+        let s = String::from_utf16(std::slice::from_raw_parts(raw, n)).ok();
         LocalFree(raw as *mut core::ffi::c_void);
         s
     };
-    Some(text)
+    text
 }
 
 struct Token(*mut std::ffi::c_void);

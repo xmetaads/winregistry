@@ -46,7 +46,7 @@ pub enum Json {
 }
 
 pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
-    let (text, _) = crate::encoding::decode(bytes);
+    let (text, _) = crate::encoding::decode_strict(bytes)?;
     let v = parse(&text)?;
     let mut notes = Vec::new();
     let mut blocks = Vec::new();
@@ -139,17 +139,42 @@ fn explicit(v: &Json, notes: Vec<String>) -> Result<(Vec<KeyBlock>, Vec<String>)
                                 ))
                             }
                         };
-                        let raw = vget("data").cloned().unwrap_or(Json::Null);
-                        let data = match vget("type") {
-                            Some(Json::Str(t)) => {
-                                typed(t, &raw).map_err(|e| format!("keys[{i}].values[{j}]: {e}"))?
+                        let data = match (vget("typeId"), vget("raw")) {
+                            (Some(Json::Int(id)), Some(Json::Str(raw)))
+                                if (0..=u32::MAX as i64).contains(id) =>
+                            {
+                                RegData::Hex {
+                                    ty: *id as u32,
+                                    bytes: parse_raw_hex(raw)
+                                        .map_err(|e| format!("keys[{i}].values[{j}].raw: {e}"))?,
+                                }
                             }
-                            None => data_of(&raw, &name)?,
-                            Some(o) => {
+                            (Some(id), Some(raw)) => {
                                 return Err(format!(
-                                    "keys[{i}].values[{j}].type must be a string, found {}",
-                                    kind(o)
+                                    "keys[{i}].values[{j}] raw form needs an unsigned integer \
+                                     \"typeId\" and string \"raw\", found {} and {}",
+                                    kind(id),
+                                    kind(raw)
                                 ))
+                            }
+                            (Some(_), None) | (None, Some(_)) => {
+                                return Err(format!(
+                                    "keys[{i}].values[{j}] must provide both \"typeId\" and \"raw\""
+                                ))
+                            }
+                            (None, None) => {
+                                let raw = vget("data").cloned().unwrap_or(Json::Null);
+                                match vget("type") {
+                                    Some(Json::Str(t)) => typed(t, &raw)
+                                        .map_err(|e| format!("keys[{i}].values[{j}]: {e}"))?,
+                                    None => data_of(&raw, &name)?,
+                                    Some(o) => {
+                                        return Err(format!(
+                                            "keys[{i}].values[{j}].type must be a string, found {}",
+                                            kind(o)
+                                        ))
+                                    }
+                                }
                             }
                         };
                         block.values.push(ValueEntry {
@@ -182,6 +207,24 @@ fn explicit(v: &Json, notes: Vec<String>) -> Result<(Vec<KeyBlock>, Vec<String>)
     Ok((blocks, notes))
 }
 
+fn parse_raw_hex(data: &str) -> Result<Vec<u8>, String> {
+    let cleaned: String = data
+        .chars()
+        .filter(|c| !matches!(c, ' ' | ',' | '-' | ':'))
+        .collect();
+    if !cleaned.len().is_multiple_of(2) {
+        return Err("raw data must have an even number of hex digits".into());
+    }
+    cleaned
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
+            u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte {s:?}"))
+        })
+        .collect()
+}
+
 /// Infer the registry type from the JSON type.
 fn data_of(v: &Json, name: &str) -> Result<RegData, String> {
     Ok(match v {
@@ -209,7 +252,7 @@ fn data_of(v: &Json, name: &str) -> Result<RegData, String> {
             let mut bytes = Vec::new();
             for it in items {
                 match it {
-                    Json::Str(s) => bytes.extend_from_slice(&crate::engine::utf16_nul(s)),
+                    Json::Str(s) => bytes.extend_from_slice(&crate::value::utf16_nul(s)),
                     other => {
                         return Err(format!(
                             "{name:?}: an array must hold strings for REG_MULTI_SZ, found {}",
@@ -268,7 +311,7 @@ fn typed(t: &str, v: &Json) -> Result<RegData, String> {
         }
         other => return Err(format!("cannot use {} as {t} data", kind(other))),
     };
-    crate::engine::parse_typed(t, &as_text)
+    crate::value::parse_typed(t, &as_text)
 }
 
 fn kind(v: &Json) -> &'static str {

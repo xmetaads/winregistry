@@ -1,0 +1,6 @@
+4[Version]
+Signature="$Windows NT$"
+[DefaultInstall]
+AddReg=Seed
+[Seed]
+HKCU,"Software\regx-fuzz","Name",0,"seed"

@@ -142,7 +142,11 @@ impl Risk {
 
 #[derive(Clone, Debug)]
 pub struct Found {
+    /// Candidate path as reached through the documented search rung.
     pub path: PathBuf,
+    /// Canonical target after resolving links/junctions and normalizing the
+    /// extended-length prefix. This may differ from `path`.
+    pub resolved_path: PathBuf,
     pub origin: Origin,
     pub format: Option<Format>,
     pub size: u64,
@@ -174,11 +178,16 @@ pub struct Options {
     pub policy: bool,
     /// Follow the registry pointer convention.
     pub registry_pointer: bool,
-    /// Report every candidate path probed, not just the hits.
+    /// Ask the text renderer to report every candidate path probed. Discovery
+    /// always retains the trail so machine-readable output is auditable.
     pub verbose: bool,
 }
 
 pub fn discover(target: &Path, opts: &Options) -> Result<Report, String> {
+    // Rendering is owned by the caller. Reading this presentation preference
+    // here keeps Options a single command-level contract while the report
+    // retains the complete trail in either mode.
+    let _text_requests_probe_trail = opts.verbose;
     let meta = std::fs::metadata(target)
         .map_err(|e| format!("cannot access {}: {e}", target.display()))?;
 
@@ -469,15 +478,13 @@ fn consider(
     origin: Origin,
     anchor: &Path,
     anchor_writable: bool,
-    opts: &Options,
+    _opts: &Options,
 ) {
     if !seen.insert(candidate.clone()) {
         return;
     }
     let Ok(meta) = std::fs::metadata(&candidate) else {
-        if opts.verbose {
-            r.searched.push(candidate);
-        }
+        r.searched.push(candidate);
         return;
     };
     if !meta.is_file() {
@@ -524,6 +531,7 @@ fn consider(
 
     r.found.push(Found {
         path: candidate,
+        resolved_path: real,
         origin,
         format,
         size: meta.len(),

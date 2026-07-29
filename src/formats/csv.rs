@@ -15,7 +15,7 @@
 use crate::model::*;
 
 pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
-    let (text, _) = crate::encoding::decode(bytes);
+    let (text, _) = crate::encoding::decode_strict(bytes)?;
     let rows = parse(&text);
     let mut rows = rows.into_iter();
 
@@ -50,17 +50,16 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
         if row.iter().all(|f| f.trim().is_empty()) {
             continue;
         }
-        let cell = |i: Option<usize>| i.and_then(|i| row.get(i)).map(|s| s.trim()).unwrap_or("");
+        let cell = |i: Option<usize>| i.and_then(|i| row.get(i)).map(String::as_str).unwrap_or("");
 
         let path = row.get(c_key).map(|s| s.trim()).unwrap_or("");
         if path.is_empty() {
-            notes.push(format!("line {line}: empty key, row skipped"));
-            continue;
+            return Err(format!("line {line}: empty key"));
         }
         let mut block = crate::formats::block(path, line)?;
 
         let name = cell(c_name);
-        let ty = cell(c_type);
+        let ty = cell(c_type).trim();
         let data = cell(c_data);
 
         // A whole-key delete: no value name, and the data says so.
@@ -70,12 +69,22 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
             count += 1;
             continue;
         }
+        if name.is_empty() && data.eq_ignore_ascii_case("CREATE_KEY") {
+            merge(&mut blocks, block);
+            count += 1;
+            continue;
+        }
 
         let value = if ty.is_empty() && data.is_empty() {
             RegData::Delete
+        } else if let Some(id) = raw_type_id(ty) {
+            RegData::Hex {
+                ty: id.map_err(|e| format!("line {line}: {e}"))?,
+                bytes: parse_hex(data).map_err(|e| format!("line {line}: {e}"))?,
+            }
         } else {
             let ty = if ty.is_empty() { "REG_SZ" } else { ty };
-            crate::engine::parse_typed(ty, data).map_err(|e| format!("line {line}: {e}"))?
+            crate::value::parse_typed(ty, data).map_err(|e| format!("line {line}: {e}"))?
         };
 
         block.values.push(ValueEntry {
@@ -89,6 +98,32 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
 
     notes.push(format!("{count} row(s) read"));
     Ok((blocks, notes))
+}
+
+fn raw_type_id(ty: &str) -> Option<Result<u32, String>> {
+    let raw = ty.strip_prefix("hex(")?.strip_suffix(')')?;
+    Some(
+        u32::from_str_radix(raw, 16)
+            .map_err(|_| format!("invalid raw registry type {ty:?}; expected hex(TYPE_ID)")),
+    )
+}
+
+fn parse_hex(data: &str) -> Result<Vec<u8>, String> {
+    let cleaned: String = data
+        .chars()
+        .filter(|c| !matches!(c, ' ' | ',' | '-' | ':'))
+        .collect();
+    if !cleaned.len().is_multiple_of(2) {
+        return Err("raw data must have an even number of hex digits".into());
+    }
+    cleaned
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
+            u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte {s:?}"))
+        })
+        .collect()
 }
 
 fn merge(blocks: &mut Vec<KeyBlock>, incoming: KeyBlock) {
@@ -206,6 +241,20 @@ mod tests {
             ValueName::Named("Odd\"Name".into())
         );
         assert_eq!(blocks[0].values[0].data, RegData::Sz("x,y".into()));
+    }
+
+    #[test]
+    fn quoted_value_names_and_string_data_preserve_edge_spaces() {
+        let input = concat!(
+            "key,name,type,data\r\n",
+            "HKCU\\Software\\A,\" Name \",REG_SZ,\" text \"\r\n"
+        );
+        let (blocks, _) = read(input.as_bytes()).unwrap();
+        assert_eq!(blocks[0].values[0].name, ValueName::Named(" Name ".into()));
+        assert_eq!(blocks[0].values[0].data, RegData::Sz(" text ".into()));
+        assert!(read(b"key,name,data\n,Value,text\n")
+            .unwrap_err()
+            .contains("empty key"));
     }
 
     #[test]

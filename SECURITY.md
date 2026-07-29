@@ -44,9 +44,22 @@ ask for:
 - **AppLocker, SRP, WDAC or SmartScreen blocking an unsigned binary.** That is
   those systems working as designed. See the AppLocker section of the docs.
 
+## Audit-anchor keys
+
+`audit --anchor-key` reads 32 to 65,536 raw secret bytes and never writes the
+key into the anchor, audit log, JSON output, or command-line record. Restrict
+the key file with Windows ACLs and preferably keep it on a different host or
+protected volume from the log. Anyone who can read the key can authenticate a
+replacement checkpoint; anyone who can modify it can cause verification to
+fail.
+
 ## Supply chain
 
-Two direct dependencies, `clap` and `anyhow`, chosen to keep this answer short.
+Five direct dependencies, `clap`, `clap_complete`, `anyhow`, `regex`, and
+`serde_json`, chosen to keep this answer short. Shell completion is generated
+from the same Clap command tree; regex compilation has explicit automaton and
+nesting limits; serde_json is used for versioned saved-plan artifacts and their
+schema.
 CI runs `cargo deny check` on every push for advisories, licences and sources.
 The build statically links the CRT, so there is no runtime redistributable to
 track separately.

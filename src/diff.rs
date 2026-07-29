@@ -266,6 +266,62 @@ pub fn compare(left: &[KeyBlock], right: &[KeyBlock]) -> Diff {
     d
 }
 
+/// Compare values without structural key changes.
+///
+/// Unlike [`compare`], removals under a key absent on the right remain
+/// explicit value deletions. This is required for a scoped value-only patch:
+/// deleting the whole key would also remove values outside the requested
+/// selection.
+pub fn compare_values(left: &[KeyBlock], right: &[KeyBlock]) -> Vec<ValueDiff> {
+    let l = index(left);
+    let r = index(right);
+    let mut values = Vec::new();
+    for (fold, (path, rvals)) in &r {
+        let lvals = l.get(fold).map(|(_, values)| values);
+        for (vfold, (name, rdata)) in rvals {
+            match lvals.and_then(|items| items.get(vfold)) {
+                None => values.push(ValueDiff {
+                    path: path.clone(),
+                    name: name.clone(),
+                    change: Change::Added,
+                    left: None,
+                    right: Some(rdata.clone()),
+                }),
+                Some((_, ldata)) if ldata != rdata => values.push(ValueDiff {
+                    path: path.clone(),
+                    name: name.clone(),
+                    change: Change::Modified,
+                    left: Some(ldata.clone()),
+                    right: Some(rdata.clone()),
+                }),
+                Some(_) => {}
+            }
+        }
+    }
+    for (fold, (path, lvals)) in &l {
+        let rvals = r.get(fold).map(|(_, values)| values);
+        for (vfold, (name, ldata)) in lvals {
+            if rvals.is_some_and(|items| items.contains_key(vfold)) {
+                continue;
+            }
+            values.push(ValueDiff {
+                path: path.clone(),
+                name: name.clone(),
+                change: Change::Removed,
+                left: Some(ldata.clone()),
+                right: None,
+            });
+        }
+    }
+    values.sort_by(|a, b| {
+        a.path
+            .fold()
+            .cmp(&b.path.fold())
+            .then_with(|| fold_str(&a.name.to_string()).cmp(&fold_str(&b.name.to_string())))
+    });
+    values
+}
+
 type ValueIndex = BTreeMap<String, (ValueName, RegData)>;
 
 /// Fold to a case-insensitive index. A `[-KEY]` block on either side means the
@@ -360,7 +416,7 @@ mod tests {
                 "p",
                 RegData::Hex {
                     ty: REG_EXPAND_SZ,
-                    bytes: crate::engine::utf16_nul("%TMP%"),
+                    bytes: crate::value::utf16_nul("%TMP%"),
                 },
             )],
         )];
@@ -448,5 +504,32 @@ mod tests {
         let d = compare(&a, &a);
         assert!(d.is_empty());
         assert!(d.to_patch().keys.is_empty());
+    }
+
+    #[test]
+    fn value_only_comparison_keeps_deletes_when_the_right_key_is_absent() {
+        let left = vec![block(
+            "HKCU\\A",
+            &[
+                ("selected", RegData::Dword(1)),
+                ("untouched", RegData::Dword(2)),
+            ],
+        )];
+        let values = compare_values(&left, &[]);
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|value| value.change == Change::Removed));
+
+        let patch = Diff {
+            keys: Vec::new(),
+            values: values
+                .into_iter()
+                .filter(|value| value.name.to_string() == "selected")
+                .collect(),
+        }
+        .to_patch();
+        assert_eq!(patch.keys.len(), 1);
+        assert!(!patch.keys[0].delete);
+        assert_eq!(patch.keys[0].values.len(), 1);
+        assert_eq!(patch.keys[0].values[0].data, RegData::Delete);
     }
 }

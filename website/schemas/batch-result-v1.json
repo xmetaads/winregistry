@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winregistry.org/schemas/batch-result-v1.json",
+  "title": "regx atomic batch result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "manifest",
+    "atomic",
+    "dryRun",
+    "undo",
+    "operations",
+    "rollback"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://winregistry.org/schemas/batch-result-v1.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "manifest": {
+      "type": "string"
+    },
+    "atomic": {
+      "const": true
+    },
+    "dryRun": {
+      "type": "boolean"
+    },
+    "undo": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/viewPath"
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "views"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "planned",
+              "skipped",
+              "notAttempted",
+              "rolledBack",
+              "rollbackFailed",
+              "failed"
+            ]
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/viewApply"
+            }
+          }
+        }
+      }
+    },
+    "rollback": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/viewApply"
+      }
+    }
+  },
+  "$defs": {
+    "viewPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["view", "path", "bytes", "sha256"],
+      "properties": {
+        "view": {
+          "enum": ["native", "32", "64"]
+        },
+        "path": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "viewApply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["view", "apply"],
+      "properties": {
+        "view": {
+          "enum": ["native", "32", "64"]
+        },
+        "apply": {
+          "$ref": "#/$defs/apply"
+        }
+      }
+    },
+    "apply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keysCreated",
+        "keysDeleted",
+        "valuesSet",
+        "valuesDeleted",
+        "failures"
+      ],
+      "properties": {
+        "keysCreated": { "type": "integer", "minimum": 0 },
+        "keysDeleted": { "type": "integer", "minimum": 0 },
+        "valuesSet": { "type": "integer", "minimum": 0 },
+        "valuesDeleted": { "type": "integer", "minimum": 0 },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target", "problem"],
+            "properties": {
+              "target": { "type": "string" },
+              "problem": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

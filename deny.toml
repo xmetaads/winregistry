@@ -2,8 +2,8 @@
 #   1. Is anything in it known-vulnerable?
 #   2. Is every licence in it acceptable to redistribute?
 #
-# regx has two direct dependencies (clap, anyhow) precisely so this stays a
-# short answer. Run locally with `cargo deny check`.
+# regx has five direct runtime dependencies precisely so this stays a short
+# answer. Run locally with `cargo deny check`.
 
 [advisories]
 # Fail on any advisory. There is no dependency here whose breakage would be

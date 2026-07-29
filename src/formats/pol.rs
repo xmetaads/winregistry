@@ -32,15 +32,193 @@
 //! | `**SecureKey`, `**ListElement` | ACL / UI hints, no registry effect |
 
 use crate::model::*;
+use std::collections::HashMap;
 use std::path::Path;
 
 const HEADER: &[u8] = b"PReg";
 
-pub fn read(
-    bytes: &[u8],
-    root: Hive,
-    path: Option<&Path>,
-) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
+/// Serialize registry data as a version-1 `Registry.pol`.
+///
+/// A policy file carries no hive field, so every block must belong to one
+/// HKCU/HKLM root. Constructs the format cannot express exactly are rejected
+/// rather than widened into a more destructive operation.
+pub fn write(file: &RegFile) -> Result<(Vec<u8>, Hive), String> {
+    let root = file
+        .keys
+        .first()
+        .map(|block| block.path.hive)
+        .ok_or_else(|| "cannot write an empty Registry.pol".to_string())?;
+    if !matches!(root, Hive::Hkcu | Hive::Hklm) {
+        return Err(format!(
+            "Registry.pol supports only HKCU or HKLM, not {}",
+            root.long_name()
+        ));
+    }
+    let mut out = Vec::from(HEADER);
+    out.extend_from_slice(&1u32.to_le_bytes());
+    for block in &file.keys {
+        if block.path.hive != root {
+            return Err(format!(
+                "Registry.pol has one implicit root; found both {} and {}",
+                root.long_name(),
+                block.path.hive.long_name()
+            ));
+        }
+        if block.path.sub.is_empty() {
+            return Err("Registry.pol cannot address its implicit root as a record key".into());
+        }
+        validate_pol_key(&block.path.sub)?;
+        if block.delete {
+            let (parent, child) = block
+                .path
+                .sub
+                .rsplit_once('\\')
+                .unwrap_or(("", block.path.sub.as_str()));
+            if parent.is_empty() || child.is_empty() {
+                return Err(
+                    "Registry.pol cannot encode deletion of a top-level key exactly".into(),
+                );
+            }
+            let mut data = utf16_bytes(child, true);
+            write_record(&mut out, parent, "**DeleteKeys", REG_SZ, &mut data)?;
+            continue;
+        }
+        if block.values.is_empty() {
+            write_record(&mut out, &block.path.sub, "", REG_NONE, &mut Vec::new())?;
+            continue;
+        }
+        for value in &block.values {
+            let name = match &value.name {
+                ValueName::Default => {
+                    return Err(format!(
+                        "Registry.pol does not define default-value mutation at {}",
+                        block.path
+                    ));
+                }
+                ValueName::Named(name) => name,
+            };
+            validate_pol_value_name(name)?;
+            let (record_name, ty, mut data) = match &value.data {
+                RegData::Delete => {
+                    if format!("**del.{name}").len() > 259 {
+                        return Err(format!(
+                            "Registry.pol cannot encode deletion of value {name:?} within the 259-character directive limit"
+                        ));
+                    }
+                    (format!("**del.{name}"), REG_SZ, utf16_bytes(" ", true))
+                }
+                RegData::Sz(text) => {
+                    if text.contains('\0') {
+                        return Err(format!(
+                            "{} contains a NUL that Registry.pol cannot encode as REG_SZ",
+                            block.path
+                        ));
+                    }
+                    (name.to_string(), REG_SZ, utf16_bytes(text, true))
+                }
+                RegData::Dword(number) => {
+                    (name.to_string(), REG_DWORD, number.to_le_bytes().to_vec())
+                }
+                RegData::Hex { ty, bytes } => {
+                    if !matches!(
+                        *ty,
+                        REG_SZ
+                            | REG_EXPAND_SZ
+                            | REG_BINARY
+                            | REG_DWORD
+                            | REG_DWORD_BIG_ENDIAN
+                            | REG_MULTI_SZ
+                            | REG_QWORD
+                    ) {
+                        return Err(format!(
+                            "Registry.pol does not define registry type {ty} at {}",
+                            block.path
+                        ));
+                    }
+                    (name.to_string(), *ty, bytes.clone())
+                }
+            };
+            write_record(&mut out, &block.path.sub, &record_name, ty, &mut data)?;
+        }
+    }
+    Ok((out, root))
+}
+
+fn validate_pol_key(key: &str) -> Result<(), String> {
+    if key.split('\\').any(|component| {
+        component.is_empty()
+            || !component
+                .chars()
+                .all(|ch| matches!(ch as u32, 0x20..=0x5b | 0x5d..=0x7e))
+    }) {
+        return Err(format!(
+            "Registry.pol key path {key:?} is outside the ASCII MS-GPREG grammar"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pol_value_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 259
+        || !name.chars().all(|ch| matches!(ch as u32, 0x20..=0x7e))
+    {
+        return Err(format!(
+            "Registry.pol value name {name:?} must be 1-259 printable ASCII characters"
+        ));
+    }
+    if name.starts_with("**") {
+        return Err(format!(
+            "Registry.pol value name {name:?} collides with a policy directive"
+        ));
+    }
+    Ok(())
+}
+
+fn write_record(
+    out: &mut Vec<u8>,
+    key: &str,
+    name: &str,
+    ty: u32,
+    data: &mut Vec<u8>,
+) -> Result<(), String> {
+    if data.len() > u16::MAX as usize {
+        return Err(format!(
+            "Registry.pol record data is {} bytes; MS-GPREG limits it to 65535",
+            data.len()
+        ));
+    }
+    let size = data.len() as u32;
+    push_char(out, '[');
+    push_utf16z(out, key);
+    push_char(out, ';');
+    push_utf16z(out, name);
+    push_char(out, ';');
+    out.extend_from_slice(&ty.to_le_bytes());
+    push_char(out, ';');
+    out.extend_from_slice(&size.to_le_bytes());
+    push_char(out, ';');
+    out.append(data);
+    push_char(out, ']');
+    Ok(())
+}
+
+fn push_char(out: &mut Vec<u8>, ch: char) {
+    out.extend_from_slice(&(ch as u16).to_le_bytes());
+}
+
+fn push_utf16z(out: &mut Vec<u8>, text: &str) {
+    out.extend(utf16_bytes(text, true));
+}
+
+fn utf16_bytes(text: &str, nul: bool) -> Vec<u8> {
+    text.encode_utf16()
+        .chain(nul.then_some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+pub fn read(bytes: &[u8], root: Hive, path: Option<&Path>) -> Result<super::ReaderResult, String> {
     if bytes.len() < 8 || &bytes[..4] != HEADER {
         return Err("not a Registry.pol file: missing the 'PReg' signature".into());
     }
@@ -56,6 +234,7 @@ pub fn read(
     // needs no flag.
     let (root, inferred) = infer_root(root, path);
     let mut notes = Vec::new();
+    let mut losses = Vec::new();
     notes.push(match inferred {
         Some(why) => format!("policy paths rooted at {} ({why})", root.long_name()),
         None => format!(
@@ -65,7 +244,7 @@ pub fn read(
     });
 
     let mut p = Cursor { b: bytes, i: 8 };
-    let mut blocks: Vec<KeyBlock> = Vec::new();
+    let mut blocks = BlockBuilder::default();
     let mut record = 0usize;
 
     while p.i < bytes.len() {
@@ -92,11 +271,18 @@ pub fn read(
             sub: key.trim_matches('\\').to_string(),
         };
 
-        apply_record(&mut blocks, path, &name, ty, data, record, &mut notes);
+        // Microsoft's key-only form leaves value, type, size, and data empty.
+        // It must not become a synthetic default REG_NONE value.
+        if name.is_empty() && ty == REG_NONE && data.is_empty() {
+            blocks.block_for(path, record);
+            continue;
+        }
+
+        apply_record(&mut blocks, path, &name, ty, data, record, &mut losses);
     }
 
     notes.insert(0, format!("{record} policy record(s)"));
-    Ok((blocks, notes))
+    Ok((blocks.blocks, notes, losses))
 }
 
 fn infer_root(fallback: Hive, path: Option<&Path>) -> (Hive, Option<&'static str>) {
@@ -114,13 +300,13 @@ fn infer_root(fallback: Hive, path: Option<&Path>) -> (Hive, Option<&'static str
 }
 
 fn apply_record(
-    blocks: &mut Vec<KeyBlock>,
+    blocks: &mut BlockBuilder,
     path: RegPath,
     name: &str,
     ty: u32,
     data: &[u8],
     record: usize,
-    notes: &mut Vec<String>,
+    losses: &mut Vec<String>,
 ) {
     // Directives are case-insensitive in practice.
     let lower = name.to_ascii_lowercase();
@@ -131,7 +317,7 @@ fn apply_record(
         push_value(
             blocks,
             path,
-            ValueName::Named(original.to_string()),
+            crate::formats::value_name(original),
             RegData::Delete,
             record,
         );
@@ -139,19 +325,24 @@ fn apply_record(
     }
 
     if lower.starts_with("**delvals.") || lower == "**delvals" {
-        // Whole-key value wipe. A .reg file has no syntax for "delete every
-        // value but keep the key", so record it as a key delete and say so.
-        let b = block_for(blocks, path.clone(), record);
-        b.delete = true;
-        notes.push(format!(
-            "record {record}: **delvals on {path} deletes every value; expressed as a key delete, \
-             which also removes subkeys"
+        // A key delete would be wider and more destructive: it also removes
+        // subkeys. Keep the key visible for inspection, omit the unrepresentable
+        // mutation, and let every write/convert caller fail closed on `losses`.
+        blocks.block_for(path.clone(), record);
+        losses.push(format!(
+            "record {record}: **delvals on {path} deletes every value while preserving subkeys"
         ));
         return;
     }
 
     if lower == "**deletevalues" {
-        for v in split_list(data) {
+        let Some(items) = split_list(data) else {
+            losses.push(format!(
+                "record {record}: **DeleteValues on {path} has a malformed UTF-16LE payload"
+            ));
+            return;
+        };
+        for v in items {
             push_value(
                 blocks,
                 path.clone(),
@@ -164,7 +355,13 @@ fn apply_record(
     }
 
     if lower == "**deletekeys" {
-        for k in split_list(data) {
+        let Some(items) = split_list(data) else {
+            losses.push(format!(
+                "record {record}: **DeleteKeys on {path} has a malformed UTF-16LE payload"
+            ));
+            return;
+        };
+        for k in items {
             let child = RegPath {
                 hive: path.hive,
                 sub: if path.sub.is_empty() {
@@ -173,7 +370,7 @@ fn apply_record(
                     format!("{}\\{}", path.sub, k)
                 },
             };
-            let b = block_for(blocks, child, record);
+            let b = blocks.block_for(child, record);
             b.delete = true;
         }
         return;
@@ -181,26 +378,18 @@ fn apply_record(
 
     if let Some(target) = lower.strip_prefix("**soft.") {
         let original = &name[name.len() - target.len()..];
-        notes.push(format!(
-            "record {record}: **soft.{original} means \"write only if absent\"; \
-             applied unconditionally because .reg has no equivalent"
+        blocks.block_for(path.clone(), record);
+        losses.push(format!(
+            "record {record}: **soft.{original} on {path} writes only when the value is absent"
         ));
-        push_value(
-            blocks,
-            path,
-            ValueName::Named(original.to_string()),
-            decode(ty, data),
-            record,
-        );
         return;
     }
 
     if lower.starts_with("**") {
-        notes.push(format!(
-            "record {record}: ignoring directive {name:?} (no registry effect)"
+        losses.push(format!(
+            "record {record}: directive {name:?} on {path} is not representable"
         ));
-        // Still make sure the key itself exists.
-        block_for(blocks, path, record);
+        blocks.block_for(path, record);
         return;
     }
 
@@ -214,13 +403,22 @@ fn apply_record(
 }
 
 /// Directive payloads are a UTF-16LE, `;`-separated, NUL-terminated list.
-fn split_list(data: &[u8]) -> Vec<String> {
-    let s = utf16(data);
-    s.split(';')
-        .map(|x| x.trim_end_matches('\0').trim())
-        .filter(|x| !x.is_empty())
-        .map(str::to_string)
-        .collect()
+fn split_list(data: &[u8]) -> Option<Vec<String>> {
+    if !data.len().is_multiple_of(2) {
+        return None;
+    }
+    let units = data
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    let s = String::from_utf16(&units).ok()?;
+    let s = s.trim_end_matches('\0');
+    Some(
+        s.split(';')
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn decode(ty: u32, data: &[u8]) -> RegData {
@@ -229,9 +427,9 @@ fn decode(ty: u32, data: &[u8]) -> RegData {
             RegData::Dword(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
         }
         REG_SZ => {
-            // Prefer the readable form when the payload is well-formed.
-            let s = utf16(data);
-            if !s.contains('\0') && !s.chars().any(|c| (c as u32) < 0x20) {
+            // Prefer the readable form only when every input byte is represented.
+            // Malformed UTF-16 or data hidden after a terminator must remain raw.
+            if let Some(s) = utf16_string(data) {
                 RegData::Sz(s)
             } else {
                 RegData::Hex {
@@ -247,37 +445,61 @@ fn decode(ty: u32, data: &[u8]) -> RegData {
     }
 }
 
-fn utf16(data: &[u8]) -> String {
+fn utf16_string(data: &[u8]) -> Option<String> {
+    if !data.len().is_multiple_of(2) {
+        return None;
+    }
     let units: Vec<u16> = data
         .chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
-    let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end])
+    let content = match units.split_last() {
+        Some((0, content)) => content,
+        _ => units.as_slice(),
+    };
+    if content.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf16(content).ok()?;
+    (!text.chars().any(|character| (character as u32) < 0x20)).then_some(text)
 }
 
-fn block_for(blocks: &mut Vec<KeyBlock>, path: RegPath, line: usize) -> &mut KeyBlock {
-    let fold = path.fold();
-    if let Some(idx) = blocks.iter().position(|b| b.path.fold() == fold) {
-        return &mut blocks[idx];
+#[derive(Default)]
+struct BlockBuilder {
+    blocks: Vec<KeyBlock>,
+    index: HashMap<String, usize>,
+}
+
+impl BlockBuilder {
+    fn block_for(&mut self, path: RegPath, line: usize) -> &mut KeyBlock {
+        let fold = path.fold();
+        let index = match self.index.get(&fold) {
+            Some(index) => *index,
+            None => {
+                let index = self.blocks.len();
+                self.blocks.push(KeyBlock {
+                    path,
+                    delete: false,
+                    values: Vec::new(),
+                    line,
+                });
+                self.index.insert(fold, index);
+                index
+            }
+        };
+        &mut self.blocks[index]
     }
-    blocks.push(KeyBlock {
-        path,
-        delete: false,
-        values: Vec::new(),
-        line,
-    });
-    blocks.last_mut().unwrap()
 }
 
 fn push_value(
-    blocks: &mut Vec<KeyBlock>,
+    blocks: &mut BlockBuilder,
     path: RegPath,
     name: ValueName,
     data: RegData,
     line: usize,
 ) {
-    block_for(blocks, path, line)
+    blocks
+        .block_for(path, line)
         .values
         .push(ValueEntry { name, data, line });
 }
@@ -328,7 +550,8 @@ impl<'a> Cursor<'a> {
                     .chunks_exact(2)
                     .map(|c| u16::from_le_bytes([c[0], c[1]]))
                     .collect();
-                return Ok(String::from_utf16_lossy(&units));
+                return String::from_utf16(&units)
+                    .map_err(|_| format!("record {record}: {what} contains malformed UTF-16"));
             }
         }
         Err(format!("record {record}: unterminated {what} string"))
@@ -414,7 +637,7 @@ mod tests {
                 &w("https://acme.test"),
             ),
         ]);
-        let (blocks, notes) = read(&bytes, Hive::Hklm, None).unwrap();
+        let (blocks, notes, losses) = read(&bytes, Hive::Hklm, None).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(
             blocks[0].path.to_string(),
@@ -426,12 +649,318 @@ mod tests {
             RegData::Sz("https://acme.test".into())
         );
         assert!(notes[0].starts_with("2 policy record"));
+        assert!(losses.is_empty());
+    }
+
+    #[test]
+    fn conditional_or_wider_directives_are_reported_without_widening() {
+        let bytes = pol(&[
+            record("Software\\Policies\\Acme", "**delvals.", REG_SZ, &w(" ")),
+            record(
+                "Software\\Policies\\Acme",
+                "**soft.Existing",
+                REG_DWORD,
+                &1u32.to_le_bytes(),
+            ),
+            record(
+                "Software\\Policies\\Acme",
+                "**SecureKey",
+                REG_DWORD,
+                &1u32.to_le_bytes(),
+            ),
+        ]);
+        let (blocks, _, losses) = read(&bytes, Hive::Hklm, None).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert!(!blocks[0].delete);
+        assert!(blocks[0].values.is_empty());
+        assert_eq!(losses.len(), 3);
+        assert!(losses[0].contains("preserving subkeys"));
+        assert!(losses[1].contains("only when the value is absent"));
+        assert!(losses[2].contains("not representable"));
+    }
+
+    #[test]
+    fn writer_round_trips_values_deletes_and_raw_types() {
+        let file = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![
+                KeyBlock {
+                    path: RegPath {
+                        hive: Hive::Hkcu,
+                        sub: "Software\\Policies\\Acme".into(),
+                    },
+                    delete: false,
+                    values: vec![
+                        ValueEntry {
+                            name: ValueName::Named("Gone".into()),
+                            data: RegData::Delete,
+                            line: 1,
+                        },
+                        ValueEntry {
+                            name: ValueName::Named("Server".into()),
+                            data: RegData::Sz("https://例.example".into()),
+                            line: 2,
+                        },
+                        ValueEntry {
+                            name: ValueName::Named("Enabled".into()),
+                            data: RegData::Dword(1),
+                            line: 3,
+                        },
+                        ValueEntry {
+                            name: ValueName::Named("Raw".into()),
+                            data: RegData::Hex {
+                                ty: REG_BINARY,
+                                bytes: vec![0, 1, 2, 255],
+                            },
+                            line: 4,
+                        },
+                    ],
+                    line: 1,
+                },
+                KeyBlock {
+                    path: RegPath {
+                        hive: Hive::Hkcu,
+                        sub: "Software\\Policies\\Acme\\Obsolete".into(),
+                    },
+                    delete: true,
+                    values: Vec::new(),
+                    line: 5,
+                },
+            ],
+        };
+        let (bytes, root) = write(&file).unwrap();
+        assert_eq!(root, Hive::Hkcu);
+        let (blocks, _, losses) = read(&bytes, root, None).unwrap();
+        assert!(losses.is_empty());
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].values.len(), 4);
+        assert_eq!(blocks[0].values[0].name, ValueName::Named("Gone".into()));
+        assert_eq!(blocks[0].values[0].data, RegData::Delete);
+        assert_eq!(
+            blocks[0].values[1].data,
+            RegData::Sz("https://例.example".into())
+        );
+        assert_eq!(blocks[0].values[2].data, RegData::Dword(1));
+        assert_eq!(
+            blocks[0].values[3].data,
+            RegData::Hex {
+                ty: REG_BINARY,
+                bytes: vec![0, 1, 2, 255]
+            }
+        );
+        assert!(blocks[1].delete);
+        assert_eq!(blocks[1].path.sub, "Software\\Policies\\Acme\\Obsolete");
+    }
+
+    #[test]
+    fn writer_refuses_states_the_format_cannot_represent_exactly() {
+        let block = |hive, sub: &str, delete| KeyBlock {
+            path: RegPath {
+                hive,
+                sub: sub.into(),
+            },
+            delete,
+            values: Vec::new(),
+            line: 1,
+        };
+        let file = |keys| RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys,
+        };
+        let (empty, _) = write(&file(vec![block(Hive::Hkcu, "Software\\Empty", false)])).unwrap();
+        let (empty_blocks, _, losses) = read(&empty, Hive::Hkcu, None).unwrap();
+        assert!(losses.is_empty());
+        assert_eq!(empty_blocks.len(), 1);
+        assert!(empty_blocks[0].values.is_empty());
+        assert!(write(&file(vec![block(Hive::Hkcu, "", true)]))
+            .unwrap_err()
+            .contains("implicit root"));
+        assert!(write(&file(vec![
+            block(Hive::Hkcu, "Software\\A", true),
+            block(Hive::Hklm, "Software\\B", true),
+        ]))
+        .unwrap_err()
+        .contains("one implicit root"));
+        let unsupported = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![KeyBlock {
+                path: RegPath {
+                    hive: Hive::Hkcu,
+                    sub: "Software\\A".into(),
+                },
+                delete: false,
+                values: vec![ValueEntry {
+                    name: ValueName::Named("Custom".into()),
+                    data: RegData::Hex {
+                        ty: 0x1234,
+                        bytes: vec![1],
+                    },
+                    line: 1,
+                }],
+                line: 1,
+            }],
+        };
+        assert!(write(&unsupported)
+            .unwrap_err()
+            .contains("does not define registry type"));
+        let oversized = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![KeyBlock {
+                path: RegPath {
+                    hive: Hive::Hkcu,
+                    sub: "Software\\A".into(),
+                },
+                delete: false,
+                values: vec![ValueEntry {
+                    name: ValueName::Named("Large".into()),
+                    data: RegData::Hex {
+                        ty: REG_BINARY,
+                        bytes: vec![0; u16::MAX as usize + 1],
+                    },
+                    line: 1,
+                }],
+                line: 1,
+            }],
+        };
+        assert!(write(&oversized).unwrap_err().contains("65535"));
+
+        let invalid_key = file(vec![block(Hive::Hkcu, "Software\\Café", false)]);
+        assert!(write(&invalid_key).unwrap_err().contains("ASCII MS-GPREG"));
+        let top_level_delete = file(vec![block(Hive::Hkcu, "Software", true)]);
+        assert!(write(&top_level_delete)
+            .unwrap_err()
+            .contains("top-level key"));
+
+        let invalid_name = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![KeyBlock {
+                path: RegPath {
+                    hive: Hive::Hkcu,
+                    sub: "Software\\A".into(),
+                },
+                delete: false,
+                values: vec![ValueEntry {
+                    name: ValueName::Named("Café".into()),
+                    data: RegData::Dword(1),
+                    line: 1,
+                }],
+                line: 1,
+            }],
+        };
+        assert!(write(&invalid_name)
+            .unwrap_err()
+            .contains("printable ASCII"));
+    }
+
+    #[test]
+    fn writer_uses_the_windows_delete_directive_payload() {
+        let file = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![KeyBlock {
+                path: RegPath {
+                    hive: Hive::Hkcu,
+                    sub: "Software\\Policies\\Acme".into(),
+                },
+                delete: false,
+                values: vec![ValueEntry {
+                    name: ValueName::Named("Gone".into()),
+                    data: RegData::Delete,
+                    line: 1,
+                }],
+                line: 1,
+            }],
+        };
+        let (bytes, _) = write(&file).unwrap();
+        assert_eq!(
+            bytes,
+            pol(&[record(
+                "Software\\Policies\\Acme",
+                "**del.Gone",
+                REG_SZ,
+                &w(" ")
+            )])
+        );
+    }
+
+    #[test]
+    fn malformed_or_hidden_string_bytes_remain_lossless_hex() {
+        let payloads = [
+            vec![0x41],
+            vec![0x00, 0xd8, 0x00, 0x00],
+            vec![0x41, 0x00, 0x00, 0x00, 0x42, 0x00],
+        ];
+        let records = payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                record(
+                    "Software\\Policies\\Acme",
+                    &format!("Raw{index}"),
+                    REG_SZ,
+                    payload,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (blocks, _, _) = read(&pol(&records), Hive::Hklm, None).unwrap();
+
+        for (entry, payload) in blocks[0].values.iter().zip(payloads) {
+            assert_eq!(
+                entry.data,
+                RegData::Hex {
+                    ty: REG_SZ,
+                    bytes: payload
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_utf16_in_policy_names_is_rejected_not_replaced() {
+        let mut item = record(
+            "Software\\Policies\\Acme",
+            "Enabled",
+            REG_DWORD,
+            &1u32.to_le_bytes(),
+        );
+        // The first key-name code unit follows the opening '[' code unit.
+        item[2..4].copy_from_slice(&0xd800u16.to_le_bytes());
+        let error = read(&pol(&[item]), Hive::Hklm, None).unwrap_err();
+        assert!(error.contains("record 1: key contains malformed UTF-16"));
+        assert!(!error.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn thousands_of_distinct_policy_keys_keep_their_order_and_values() {
+        let records: Vec<Vec<u8>> = (0..5_000)
+            .map(|index| {
+                record(
+                    &format!("Software\\Policies\\Bench\\K{index:06}"),
+                    "Enabled",
+                    REG_DWORD,
+                    &(index as u32).to_le_bytes(),
+                )
+            })
+            .collect();
+        let (blocks, _, _) = read(&pol(&records), Hive::Hklm, None).unwrap();
+        assert_eq!(blocks.len(), records.len());
+        assert_eq!(blocks[0].path.sub, "Software\\Policies\\Bench\\K000000");
+        assert_eq!(
+            blocks.last().unwrap().path.sub,
+            "Software\\Policies\\Bench\\K004999"
+        );
+        assert_eq!(blocks.last().unwrap().values.len(), 1);
     }
 
     #[test]
     fn del_directive_becomes_a_value_delete() {
         let bytes = pol(&[record("Software\\Acme", "**del.Legacy", REG_SZ, &w(" "))]);
-        let (blocks, _) = read(&bytes, Hive::Hkcu, None).unwrap();
+        let (blocks, _, _) = read(&bytes, Hive::Hkcu, None).unwrap();
         assert_eq!(blocks[0].values[0].name, ValueName::Named("Legacy".into()));
         assert_eq!(blocks[0].values[0].data, RegData::Delete);
     }
@@ -444,9 +973,36 @@ mod tests {
             REG_SZ,
             &w("A;B;C"),
         )]);
-        let (blocks, _) = read(&bytes, Hive::Hkcu, None).unwrap();
+        let (blocks, _, _) = read(&bytes, Hive::Hkcu, None).unwrap();
         assert_eq!(blocks[0].values.len(), 3);
         assert!(blocks[0].values.iter().all(|v| v.data == RegData::Delete));
+    }
+
+    #[test]
+    fn delete_lists_preserve_spaces_and_malformed_lists_are_losses() {
+        let bytes = pol(&[record(
+            "Software\\Acme",
+            "**DeleteValues",
+            REG_SZ,
+            &w(" Leading;Trailing ; Both "),
+        )]);
+        let (blocks, _, losses) = read(&bytes, Hive::Hkcu, None).unwrap();
+        let names = blocks[0]
+            .values
+            .iter()
+            .map(|value| match &value.name {
+                ValueName::Named(name) => name.as_str(),
+                ValueName::Default => "@",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, [" Leading", "Trailing ", " Both "]);
+        assert!(losses.is_empty());
+
+        let malformed = pol(&[record("Software\\Acme", "**DeleteKeys", REG_SZ, &[0x00])]);
+        let (blocks, _, losses) = read(&malformed, Hive::Hkcu, None).unwrap();
+        assert!(blocks.is_empty());
+        assert_eq!(losses.len(), 1);
+        assert!(losses[0].contains("malformed UTF-16LE"));
     }
 
     #[test]
@@ -457,7 +1013,7 @@ mod tests {
             REG_SZ,
             &w("Old;Older"),
         )]);
-        let (blocks, _) = read(&bytes, Hive::Hkcu, None).unwrap();
+        let (blocks, _, _) = read(&bytes, Hive::Hkcu, None).unwrap();
         assert_eq!(blocks.len(), 2);
         assert!(blocks.iter().all(|b| b.delete));
         assert_eq!(blocks[0].path.sub, "Software\\Acme\\Old");
@@ -472,7 +1028,7 @@ mod tests {
             &0u32.to_le_bytes(),
         )]);
         let p = Path::new(r"C:\Windows\System32\GroupPolicy\User\Registry.pol");
-        let (blocks, notes) = read(&bytes, Hive::Hklm, Some(p)).unwrap();
+        let (blocks, notes, _) = read(&bytes, Hive::Hklm, Some(p)).unwrap();
         assert_eq!(
             blocks[0].path.hive,
             Hive::Hkcu,

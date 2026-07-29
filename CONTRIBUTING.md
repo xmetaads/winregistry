@@ -73,10 +73,16 @@ Before pushing:
 ```bash
 python3 scripts/check_site.py
 python3 scripts/check_vercel.py
+python3 scripts/check_workflows.py
 ```
 
 The Content-Security-Policy has no `unsafe-inline`, so an inline `<script>` or a
 `style=""` attribute will be blocked in production. The checkers fail on both.
+
+When editing `.github/workflows/`, pin every external `uses:` entry to a full
+commit SHA and retain a version comment such as `# v5`; Dependabot uses that
+comment when proposing safe updates. Privileged relay triggers
+`pull_request_target` and `workflow_run` are intentionally forbidden.
 
 ## Commits
 

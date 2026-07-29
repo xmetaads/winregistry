@@ -116,8 +116,15 @@ issue.** For a cloud signing service, replace the `signtool sign /f` invocation
 with that service's action — the surrounding verification and staging steps do
 not change.
 
-Every unsigned release emits a workflow warning naming the gap, so it stays
-visible rather than becoming the status quo by default.
+The workflow fails closed when the staged executable is not validly signed.
+Publishing an intentionally unsigned preview requires a repository owner to
+set the Actions variable `ALLOW_UNSIGNED_PREVIEW=true`; that path emits a
+prominent warning. Leaving the variable unset cannot silently establish
+unsigned releases as the default.
+The exception applies only when Windows reports `NotSigned`. A present but
+broken, hash-mismatched, expired, or untrusted signature always fails the
+release, even when unsigned previews are enabled. Post-release smoke repeats
+that check for both architectures.
 
 ## The pipeline is already rehearsed
 
@@ -143,6 +150,10 @@ countersign a certificate it has never seen, and the release workflow does pass
 ## Verifying a release
 
 ```powershell
+# Maintainer preflight: exact inventory, hashes, PE machines, manifests and SBOM.
+python scripts/check_release_identity.py v0.2.0 --require-git-tag
+python scripts/check_release_assets.py dist v0.2.0
+
 # Integrity: does this file match what was published?
 (Get-FileHash regx-x86_64.exe -Algorithm SHA256).Hash.ToLower()
 # Compare against SHA256SUMS from the release.
@@ -163,6 +174,20 @@ gh attestation verify regx-x86_64.exe --repo xmetaads/winregistry
 
 That is independent of code signing: it answers "which build produced this",
 not "who vouches for it". An enterprise deployment wants both.
+
+The validator has a dependency-free negative suite:
+
+```powershell
+python scripts/check_release_assets.py --self-test
+python scripts/check_release_identity.py --self-test
+```
+
+Together they prove that mismatched Cargo/tag identities, undated or empty
+changelog entries, untagged commits, wrong architecture, checksum tampering,
+elevation requests, wrong SBOM identity, unexpected assets, and a binary
+exactly at the nominal size boundary are rejected. CI runs both suites, and
+the publish job runs the same validators against the tagged source and
+assembled assets.
 
 ## If you cannot sign yet
 

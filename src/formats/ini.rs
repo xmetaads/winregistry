@@ -21,7 +21,7 @@
 use crate::model::*;
 
 pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
-    let (text, _) = crate::encoding::decode(bytes);
+    let (text, _) = crate::encoding::decode_strict(bytes)?;
     let mut blocks: Vec<KeyBlock> = Vec::new();
     let mut notes = Vec::new();
     let mut current: Option<usize> = None;
@@ -89,7 +89,7 @@ pub fn read(bytes: &[u8]) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
                 } else {
                     data.to_string()
                 };
-                crate::engine::parse_typed(t, &normalised)
+                crate::value::parse_typed(t, &normalised)
                     .map_err(|e| format!("line {line_no}: {e}"))?
             }
         };

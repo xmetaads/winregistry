@@ -287,17 +287,40 @@ mod tests {
         // this fails until it is wired in.
         let main = include_str!("main.rs");
 
-        // The live paths: import/sync, set, delete.
+        // The ordinary live paths: import/sync, undo, set, delete.
         assert_eq!(
             main.matches("enforce_denies(policy, &file)?").count(),
-            3,
-            "expected the deny check in import/sync, set and delete"
+            4,
+            "expected import/sync preflight, undo, set and delete checks"
         );
-        // The offline hive paths: set, delete, import.
+        assert_eq!(
+            main.matches("enforce_denies(policy, &per_view)?").count(),
+            1,
+            "expected generated per-view reconciliation deletes to be rechecked"
+        );
+        assert_eq!(
+            main.matches("enforce_denies(policy, &combined)?").count(),
+            5,
+            "expected subtree/value copy-move and both saved-plan apply paths to check the complete two-phase mutation"
+        );
+        assert_eq!(
+            main.matches("enforce_denies(policy, &restore_file)?")
+                .count(),
+            2,
+            "expected single- and dual-view application-hive restore to check every live destination"
+        );
+        // The offline hive paths: set, delete, import, undo, plus sync before
+        // and after it generates reconciliation deletes.
         assert_eq!(
             main.matches("enforce_hive_denies(policy, &file)?").count(),
-            3,
-            "expected the deny check in all three hive write operations"
+            6,
+            "expected set/delete/import/undo guards and both hive-sync policy boundaries"
+        );
+        assert_eq!(
+            main.matches("enforce_hive_denies(policy, &combined)?")
+                .count(),
+            2,
+            "expected offline subtree and value copy/move to check their complete two-phase mutations"
         );
 
         // The check must also come before anything the refusal would have to
@@ -305,7 +328,8 @@ mod tests {
         // orderings were wrong when first written, one function apart, so the
         // relative positions are pinned rather than trusted.
         for (func, after) in [
-            ("fn cmd_import(", "undo::snapshot"),
+            ("fn cmd_import(", "capture_prepared_view_snapshots"),
+            ("fn cmd_import(", "add_prune_deletes"),
             ("fn cmd_import(", "if !confirm("),
             ("fn cmd_delete(", "if !confirm("),
         ] {
@@ -331,6 +355,26 @@ mod tests {
                 "{func}: the deny check must precede {after:?}"
             );
         }
+        {
+            let func = "fn cmd_copy_move(";
+            let start = main
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} not found"));
+            let rest = &main[start + func.len()..];
+            let body = &rest[..rest.find("\nfn ").unwrap_or(rest.len())];
+            let deny = body
+                .find("enforce_denies(policy, &combined)?")
+                .expect("copy/move has no combined deny check");
+            for after in ["undo::snapshot", "if !confirm(", "apply_copy_move_atomic("] {
+                let later = body
+                    .find(after)
+                    .unwrap_or_else(|| panic!("{func} no longer contains {after:?}"));
+                assert!(
+                    deny < later,
+                    "{func}: the combined deny check must precede {after:?}"
+                );
+            }
+        }
 
         // And every apply in the shipped binary must be the audited one. The
         // unaudited entry point is #[cfg(test)] precisely so this holds.
@@ -341,9 +385,120 @@ mod tests {
         );
         assert_eq!(
             main.matches("engine::apply_audited(").count(),
-            6,
-            "expected six audited write paths: import/sync, set, delete, and three hive ops"
+            18,
+            "expected the audited write sites including offline-hive batch apply and rollback"
         );
+
+        // A declined confirmation is a no-side-effect result. Snapshot reads
+        // happen before the question, but the final undo-artifact write in
+        // every artifact-producing mutation function must happen afterwards.
+        for func in [
+            "fn cmd_import(",
+            "fn cmd_undo(",
+            "fn cmd_apply_plan(",
+            "fn cmd_batch(",
+            "fn cmd_copy_move_value(",
+            "fn cmd_restore(",
+            "fn cmd_restore_both(",
+            "fn cmd_copy_move(",
+            "fn cmd_copy_move_both(",
+            "fn cmd_apply_copy_plan(",
+            "fn cmd_apply_copy_plan_both(",
+        ] {
+            let start = main
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} not found"));
+            let rest = &main[start + func.len()..];
+            let body = &rest[..rest.find("\nfn ").unwrap_or(rest.len())];
+            let confirmation = body
+                .rfind("if !confirm(")
+                .unwrap_or_else(|| panic!("{func} has no confirmation"));
+            let artifact = body
+                .rfind("write_reg(")
+                .unwrap_or_else(|| panic!("{func} has no undo artifact"));
+            assert!(
+                confirmation < artifact,
+                "{func}: undo artifact is written before confirmation"
+            );
+        }
+        // Set/delete share one artifact writer. Each caller must confirm before
+        // invoking it, and the helper itself is the only place that persists
+        // these direct-mutation snapshots.
+        for func in ["fn cmd_set(", "fn cmd_delete("] {
+            let start = main
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} not found"));
+            let rest = &main[start + func.len()..];
+            let body = &rest[..rest.find("\nfn ").unwrap_or(rest.len())];
+            let confirmation = body
+                .find("if !confirm(")
+                .unwrap_or_else(|| panic!("{func} has no confirmation"));
+            let artifact = body
+                .find("write_direct_mutation_undo(")
+                .unwrap_or_else(|| panic!("{func} does not persist its undo"));
+            assert!(
+                confirmation < artifact,
+                "{func}: shared undo writer is called before confirmation"
+            );
+        }
+        {
+            let func = "fn write_direct_mutation_undo(";
+            let start = main.find(func).expect("direct undo writer not found");
+            let rest = &main[start + func.len()..];
+            let body = &rest[..rest.find("\nfn ").unwrap_or(rest.len())];
+            assert!(
+                body.contains("write_reg("),
+                "direct mutation undo helper no longer writes the snapshot"
+            );
+        }
+        let hive_ops = main
+            .split_once("fn run_hive_op(")
+            .map(|(_, body)| body)
+            .expect("run_hive_op not found");
+        let hive_batch = hive_ops
+            .split_once("HiveOp::Batch {")
+            .map(|(_, rest)| {
+                rest.split_once("HiveOp::Export {")
+                    .map(|(body, _)| body)
+                    .expect("hive batch no longer precedes export")
+            })
+            .expect("HiveOp::Batch not found");
+        assert!(
+            hive_batch
+                .find("if !confirm(")
+                .expect("hive batch confirmation")
+                < hive_batch
+                    .find("write_reg(")
+                    .expect("hive batch undo artifact"),
+            "offline-hive batch writes its undo artifact before confirmation"
+        );
+        for (start_marker, end_marker, label) in [
+            ("HiveOp::Set {", "HiveOp::Delete {", "hive set"),
+            ("HiveOp::Delete {", "HiveOp::Copy {", "hive delete"),
+            ("HiveOp::Copy {", "HiveOp::CopyValue {", "hive copy/move"),
+            (
+                "HiveOp::CopyValue {",
+                "HiveOp::Import {",
+                "hive value copy/move",
+            ),
+            ("HiveOp::Import {", "HiveOp::Sync {", "hive import"),
+            ("HiveOp::Sync {", "HiveOp::Batch {", "hive sync"),
+        ] {
+            let body = hive_ops
+                .split_once(start_marker)
+                .and_then(|(_, rest)| rest.split_once(end_marker).map(|(body, _)| body))
+                .unwrap_or_else(|| panic!("{label} branch not found"));
+            let confirmation = body
+                .rfind("if !confirm(")
+                .unwrap_or_else(|| panic!("{label} confirmation not found"));
+            let artifact = body
+                .rfind("write_hive_undo(")
+                .unwrap_or_else(|| panic!("{label} undo write not found"));
+            assert!(
+                confirmation < artifact,
+                "{label} writes its undo artifact before confirmation"
+            );
+        }
     }
 
     #[test]

@@ -19,6 +19,9 @@
 use crate::engine::{self, Roots};
 use crate::model::*;
 use crate::winreg::{View, KEY_READ};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_UNDO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub struct Snapshot {
     pub file: RegFile,
@@ -157,19 +160,69 @@ fn topmost_missing(roots: &Roots, path: &RegPath, view: View) -> RegPath {
     path.clone()
 }
 
-/// Default undo path next to the source file: `foo.reg` -> `foo.undo.reg`.
+/// A unique undo path next to the source file.
+///
+/// Keeping it beside the input makes discovery straightforward, while the
+/// shared suffix prevents concurrent operations on the same input from
+/// overwriting one another.
 pub fn default_path(source: &std::path::Path) -> std::path::PathBuf {
     let stem = source
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "regx".into());
-    source.with_file_name(format!("{stem}.undo.reg"))
+    unique_path(
+        source
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new(".")),
+        &stem,
+    )
+}
+
+/// A collision-resistant undo name in the current user's temporary directory.
+///
+/// PID separates concurrent processes, the monotonic sequence separates calls
+/// within one process even when the clock has coarse resolution, and the
+/// timestamp avoids reuse after Windows recycles a PID. This function has no
+/// filesystem side effect, so callers can calculate a prospective path before
+/// confirmation without violating the cancellation boundary.
+pub fn temporary_path(operation: &str) -> std::path::PathBuf {
+    unique_path(
+        &std::env::temp_dir(),
+        &format!("regx-{}", safe_component(operation)),
+    )
+}
+
+fn safe_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn unique_path(directory: &std::path::Path, stem: &str) -> std::path::PathBuf {
+    let sequence = TEMP_UNDO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    directory.join(format!(
+        "{stem}-{}-{nonce}-{sequence}.undo.reg",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::apply;
+    use std::collections::HashSet;
 
     fn block(path: &str, values: Vec<(ValueName, RegData)>) -> KeyBlock {
         KeyBlock {
@@ -187,6 +240,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn temporary_undo_names_are_unique_and_sanitized_under_concurrency() {
+        let threads = (0..16)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..256)
+                        .map(|_| temporary_path("copy/value"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let paths = threads
+            .into_iter()
+            .flat_map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 4096);
+        assert_eq!(
+            paths.iter().collect::<HashSet<_>>().len(),
+            paths.len(),
+            "temporary undo allocator reused a path"
+        );
+        assert!(paths.iter().all(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("regx-copy-value-")
+                        && name.ends_with(".undo.reg")
+                        && !name.contains('/')
+                        && !name.contains('\\')
+                })
+        }));
+        assert!(
+            paths.iter().all(|path| !path.exists()),
+            "path allocation itself must not create an artifact"
+        );
+
+        let source = std::env::temp_dir().join("desired settings.reg");
+        let adjacent = (0..1024).map(|_| default_path(&source)).collect::<Vec<_>>();
+        assert_eq!(
+            adjacent.iter().collect::<HashSet<_>>().len(),
+            adjacent.len(),
+            "source-adjacent undo allocator reused a path"
+        );
+        assert!(adjacent.iter().all(|path| {
+            path.parent() == source.parent()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("desired settings-") && name.ends_with(".undo.reg")
+                    })
+                && !path.exists()
+        }));
+    }
+
     fn file(keys: Vec<KeyBlock>) -> RegFile {
         RegFile {
             format: RegFormat::V5,
@@ -198,6 +306,11 @@ mod tests {
     #[test]
     fn undo_restores_prior_state_exactly() {
         let roots = Roots::live();
+        let software = RegPath::parse("HKEY_CURRENT_USER\\Software").unwrap();
+        if !engine::probe(&roots, &software, View::Native).writable {
+            eprintln!("SKIPPED: HKCU\\Software is not writable on this host");
+            return;
+        }
         let base = "Software\\regx-undo-test";
         let root = RegPath::parse(&format!("HKEY_CURRENT_USER\\{base}")).unwrap();
 
@@ -256,6 +369,11 @@ mod tests {
     #[test]
     fn undo_of_a_delete_block_recreates_the_subtree() {
         let roots = Roots::live();
+        let software = RegPath::parse("HKEY_CURRENT_USER\\Software").unwrap();
+        if !engine::probe(&roots, &software, View::Native).writable {
+            eprintln!("SKIPPED: HKCU\\Software is not writable on this host");
+            return;
+        }
         let base = "Software\\regx-undo-del";
         let root = RegPath::parse(&format!("HKEY_CURRENT_USER\\{base}")).unwrap();
 

@@ -1,15 +1,27 @@
 [package]
 name = "regx"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.94.1"
 description = "Portable, non-admin Windows Registry CLI"
+license = "MIT"
+repository = "https://github.com/xmetaads/winregistry"
+homepage = "https://www.winregistry.org"
+readme = "README.md"
+keywords = ["windows", "registry", "cli", "automation"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 # "env" lets the audit log be turned on machine-wide through REGX_AUDIT_LOG
 # rather than relying on every invocation remembering the flag.
 clap = { version = "4", features = ["derive", "wrap_help", "env"] }
+clap_complete = "4"
 anyhow = "1"
+regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
+serde_json = "1"
+
+[dev-dependencies]
+clap_mangen = "0.3"
 
 [profile.release]
 opt-level = "z"

@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a concrete registry, pipeline, or website capability.
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow cannot be completed safely today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior rather than an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and compatibility
+      description: |
+        Which hives/views are involved? What should dry-run, undo, policy,
+        audit, JSON output, and partial failure do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Local live registry
+        - Offline application hive
+        - Input/output pipeline
+        - Website or documentation
+        - CI, release, or packaging
+    validations:
+      required: true
+

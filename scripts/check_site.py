@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,56 @@ def fail(m: str) -> None:
 
 def warn(m: str) -> None:
     warns.append(m)
+
+
+def dom_reference_problems(html: str) -> list[str]:
+    """Return structural ID/reference errors that a browser may silently tolerate."""
+    ids = re.findall(r'\bid="([^"]+)"', html)
+    counts = Counter(ids)
+    problems = [
+        f"duplicate id {name!r} occurs {count} times"
+        for name, count in sorted(counts.items())
+        if count > 1
+    ]
+
+    for target in re.findall(r'\bdata-copy-target="([^"]+)"', html):
+        count = counts[target]
+        if count != 1:
+            problems.append(
+                f"copy target {target!r} resolves to {count} elements; expected 1"
+            )
+
+    for attribute, value in re.findall(
+        r'\b(aria-controls|aria-labelledby|aria-describedby)="([^"]+)"', html
+    ):
+        for target in value.split():
+            count = counts[target]
+            if count != 1:
+                problems.append(
+                    f"{attribute} target {target!r} resolves to {count} elements; expected 1"
+                )
+    return problems
+
+
+if sys.argv[1:] == ["--self-test"]:
+    valid = (
+        '<button aria-controls="panel" data-copy-target="snippet"></button>'
+        '<div id="panel"></div><code id="snippet"></code>'
+    )
+    invalid = (
+        '<button aria-controls="missing" data-copy-target="snippet"></button>'
+        '<div id="duplicate"></div><div id="duplicate"></div>'
+    )
+    if dom_reference_problems(valid):
+        sys.exit("FAIL: valid DOM-reference fixture was rejected")
+    invalid_problems = dom_reference_problems(invalid)
+    expected = ("duplicate id", "copy target", "aria-controls target")
+    if not all(any(marker in problem for problem in invalid_problems) for marker in expected):
+        sys.exit(f"FAIL: invalid fixture was not fully rejected: {invalid_problems}")
+    print("PASS: DOM-reference validator accepts valid and rejects invalid fixtures")
+    sys.exit(0)
+if sys.argv[1:]:
+    sys.exit("usage: check_site.py [--self-test]")
 
 
 pages = sorted(SITE.glob("*.html"))
@@ -61,6 +112,8 @@ def resolve(ref: str) -> Path | None:
 for page in pages:
     html = page.read_text(encoding="utf-8")
     ids = set(re.findall(r'id="([^"]+)"', html))
+    for problem in dom_reference_problems(html):
+        fail(f"{page.name}: {problem}")
 
     for ref in re.findall(r'(?:href|src)="([^"]+)"', html):
         if ref.startswith(("http://", "https://", "mailto:", "data:", "#")):
@@ -79,7 +132,93 @@ for page in pages:
         if anchor not in ids:
             fail(f"{page.name}: dead in-page anchor #{anchor}")
 
+    if "Windows 8.1" in html:
+        fail(f"{page.name}: claims unsupported Windows 8.1 compatibility")
+
 ok(f"references and anchors resolve across {len(pages)} page(s)")
+ok("DOM IDs, copy targets, and ARIA references resolve uniquely")
+
+# --------------------------------------------------------------------------
+# Cross-artifact product claims
+# --------------------------------------------------------------------------
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+home = (SITE / "index.html").read_text(encoding="utf-8")
+site_notes = (SITE / "README.md").read_text(encoding="utf-8")
+test_count = re.search(r"cargo test\s+#\s+([0-9]+) tests", readme)
+home_count = re.search(
+    r"<dt>([0-9]+)</dt><dd>Automated tests, including live registry</dd>", home
+)
+notes_count = re.search(r"hero says &lt;2 MiB and ([0-9]+) tests", site_notes)
+if not test_count or not home_count or not notes_count:
+    fail("cannot resolve the shared automated-test count claim")
+elif len({test_count.group(1), home_count.group(1), notes_count.group(1)}) != 1:
+    fail(
+        "automated-test count drifts between README, website home, and "
+        f"website release notes: {test_count.group(1)}, {home_count.group(1)}, "
+        f"{notes_count.group(1)}"
+    )
+else:
+    ok(f"automated-test count agrees across product claims ({test_count.group(1)})")
+
+release_truth = {
+    "index.html": [
+        "v0.2 source",
+        "&lt;2 MiB",
+        "The first binary release is pending",
+        "Windows 10 / Server 2016 or later",
+    ],
+    "docs.html": [
+        "The first binary release has not been published yet",
+        "The first binary release is pending",
+        "Windows 10 / Server 2016 or later",
+    ],
+}
+for name, markers in release_truth.items():
+    html = (SITE / name).read_text(encoding="utf-8")
+    for marker in markers:
+        if marker not in html:
+            fail(f"{name}: missing truthful pre-release marker {marker!r}")
+    for stale in ("v0.1 &middot;", "x64 released", "851 KB", "138</dt>"):
+        if stale in html:
+            fail(f"{name}: contains stale deployed claim {stale!r}")
+ok("pre-release, platform, size and version claims are pinned")
+
+# --------------------------------------------------------------------------
+# Social preview contract
+# --------------------------------------------------------------------------
+og_image = SITE / "assets" / "img" / "og-winregistry.png"
+if not og_image.is_file():
+    fail("Open Graph image is missing")
+else:
+    png = og_image.read_bytes()
+    if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n":
+        fail("Open Graph image is not a valid PNG")
+    else:
+        width = int.from_bytes(png[16:20], "big")
+        height = int.from_bytes(png[20:24], "big")
+        ratio = width / height if height else 0
+        if width < 1200 or height < 630 or not 1.89 <= ratio <= 1.92:
+            fail(
+                f"Open Graph image is {width}x{height}; expected at least "
+                "1200x630 with a 1.91:1 aspect ratio"
+            )
+        else:
+            ok(f"Open Graph image is a valid large social card ({width}x{height})")
+
+og_url = "https://www.winregistry.org/assets/img/og-winregistry.png"
+for name in ("index.html", "docs.html"):
+    html = (SITE / name).read_text(encoding="utf-8")
+    required_social = [
+        f'<meta property="og:image" content="{og_url}">',
+        '<meta property="og:image:alt"',
+        '<meta name="twitter:card" content="summary_large_image">',
+        f'<meta name="twitter:image" content="{og_url}">',
+        '<meta name="twitter:image:alt"',
+    ]
+    for marker in required_social:
+        if marker not in html:
+            fail(f"{name}: missing social metadata {marker}")
+ok("home and docs declare Open Graph and Twitter image metadata")
 
 
 # --------------------------------------------------------------------------

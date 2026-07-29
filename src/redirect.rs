@@ -158,10 +158,56 @@ pub fn map(path: &RegPath, policy: Policy) -> Mapping {
         );
     }
 
+    // These are Windows mechanisms, not ordinary application preferences.
+    // Their HKLM and HKCU branches have different semantics, so copying the
+    // same path into HKCU would report success without preserving behaviour.
+    if strip_ci(
+        &sub,
+        "SOFTWARE\\Microsoft\\Active Setup\\Installed Components",
+    )
+    .is_some()
+    {
+        return Mapping {
+            to: None,
+            confidence: Confidence::Refuse,
+            reason: "Active Setup HKLM entries register components, while HKCU entries record per-user completion; they are not interchangeable",
+        };
+    }
+
+    if strip_ci(
+        &sub,
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+    )
+    .is_some()
+        || strip_ci(
+            &sub,
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+        )
+        .is_some()
+    {
+        return Mapping {
+            to: None,
+            confidence: Confidence::Refuse,
+            reason: "User Shell Folders must be set in the existing HKCU profile (prefer the Windows Known Folder API); machine and user value sets are not interchangeable",
+        };
+    }
+
+    if strip_ci(
+        &sub,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+    )
+    .is_some()
+    {
+        return Mapping {
+            to: None,
+            confidence: Confidence::Refuse,
+            reason: "Winlogon Shell/Userinit are machine logon settings; redirecting them can break sign-in and has no safe per-user equivalent",
+        };
+    }
+
     for run in [
         "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
         "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
-        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
         "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
     ] {
         if strip_ci(&sub, run).is_some() {
@@ -283,6 +329,58 @@ mod tests {
     fn userchoice_is_refused() {
         let m = map(&p("HKEY_CLASSES_ROOT\\.pdf\\UserChoice"), Policy::Auto);
         assert_eq!(m.confidence, Confidence::Refuse);
+    }
+
+    #[test]
+    fn active_setup_is_recognised_and_refused() {
+        let m = map(
+            &p("HKLM\\Software\\Microsoft\\Active Setup\\Installed Components\\{ABC}"),
+            Policy::Auto,
+        );
+        assert_eq!(m.confidence, Confidence::Refuse);
+        assert!(m.to.is_none());
+        assert!(m.reason.contains("Active Setup"));
+    }
+
+    #[test]
+    fn active_setup_wow6432_alias_is_recognised() {
+        let m = map(
+            &p("HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Active Setup\\Installed Components\\{ABC}"),
+            Policy::Auto,
+        );
+        assert_eq!(m.confidence, Confidence::Refuse);
+        assert!(m.reason.contains("Active Setup"));
+    }
+
+    #[test]
+    fn user_shell_folders_are_recognised_and_refused() {
+        let m = map(
+            &p("HKLM\\software\\microsoft\\windows\\currentversion\\explorer\\user shell folders"),
+            Policy::Auto,
+        );
+        assert_eq!(m.confidence, Confidence::Refuse);
+        assert!(m.to.is_none());
+        assert!(m.reason.contains("Known Folder"));
+    }
+
+    #[test]
+    fn winlogon_is_recognised_and_refused() {
+        let m = map(
+            &p("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"),
+            Policy::Auto,
+        );
+        assert_eq!(m.confidence, Confidence::Refuse);
+        assert!(m.to.is_none());
+        assert!(m.reason.contains("Winlogon"));
+    }
+
+    #[test]
+    fn unrelated_explorer_key_is_not_overstated_as_high_confidence() {
+        let m = map(
+            &p("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced"),
+            Policy::Auto,
+        );
+        assert_eq!(m.confidence, Confidence::Medium);
     }
 
     #[test]

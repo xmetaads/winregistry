@@ -10,7 +10,8 @@
 //!     disabling writes `REG_DWORD 0`
 //!   * `<enabledList>` / `<disabledList>` entries, which carry literal values
 //!
-//! What is **not** emitted, only reported: `<elements>` — `text`, `decimal`,
+//! What is **not** emitted, but reported as a fidelity loss: `<elements>` —
+//! `text`, `decimal`,
 //! `boolean`, `enum`, `list`, `multiText`. Those hold whatever the administrator
 //! typed into the Group Policy editor, and inventing a value for them would put
 //! fabricated data into the registry. `regx inspect` lists them so you can see
@@ -22,6 +23,7 @@
 //! An accompanying `.adml` in a language folder (`en-US\Foo.adml`) resolves the
 //! `$(string.Id)` display names. It is found automatically next to the ADMX.
 
+use super::OrderedBlocks;
 use crate::model::*;
 use crate::xml::Node;
 use std::collections::BTreeMap;
@@ -48,8 +50,8 @@ pub fn read(
     path: Option<&Path>,
     state: State,
     only: Option<&str>,
-) -> Result<(Vec<KeyBlock>, Vec<String>), String> {
-    let (text, _) = crate::encoding::decode(bytes);
+) -> Result<super::ReaderResult, String> {
+    let (text, _) = crate::encoding::decode_strict(bytes)?;
     let root = crate::xml::parse(&text)?;
     if !root.name.eq_ignore_ascii_case("policyDefinitions") {
         return Err(format!(
@@ -60,6 +62,7 @@ pub fn read(
 
     let strings = path.map(load_adml).unwrap_or_default();
     let mut notes = Vec::new();
+    let mut losses = Vec::new();
     if !strings.is_empty() {
         notes.push(format!(
             "{} display string(s) resolved from the ADML",
@@ -76,7 +79,7 @@ pub fn read(
         return Err("this ADMX declares no <policy> elements".into());
     }
 
-    let mut blocks: Vec<KeyBlock> = Vec::new();
+    let mut blocks = OrderedBlocks::new();
     let mut matched = 0usize;
     let mut skipped_elements = 0usize;
 
@@ -90,19 +93,22 @@ pub fn read(
         matched += 1;
 
         let Some(key) = p.attr("key") else {
-            notes.push(format!("policy {name}: no key attribute, skipped"));
+            losses.push(format!("policy {name}: no key attribute"));
             continue;
         };
 
-        let hives = match p
-            .attr("class")
-            .unwrap_or("Machine")
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        let Some(class) = p.attr("class") else {
+            losses.push(format!("policy {name}: no class attribute"));
+            continue;
+        };
+        let hives = match class.to_ascii_lowercase().as_str() {
             "user" => vec![Hive::Hkcu],
             "both" => vec![Hive::Hklm, Hive::Hkcu],
-            _ => vec![Hive::Hklm],
+            "machine" => vec![Hive::Hklm],
+            _ => {
+                losses.push(format!("policy {name}: unknown class {class:?}"));
+                continue;
+            }
         };
 
         let display = p
@@ -118,13 +124,28 @@ pub fn read(
             let mut entries: Vec<ValueEntry> = Vec::new();
 
             if let Some(vn) = p.attr("valueName") {
-                let data = match state {
-                    State::Enabled => value_of(p.kid("enabledValue"))
-                        // The documented default when the ADMX omits it.
-                        .unwrap_or(RegData::Dword(1)),
-                    State::Disabled => {
-                        value_of(p.kid("disabledValue")).unwrap_or(RegData::Dword(0))
-                    }
+                let value_node = match state {
+                    State::Enabled => p.kid("enabledValue"),
+                    State::Disabled => p.kid("disabledValue"),
+                };
+                let data = match (value_node, state) {
+                    (Some(node), _) => match value_of(Some(node)) {
+                        Some(data) => data,
+                        None => {
+                            losses.push(format!(
+                                "policy {name}: malformed or unsupported <{}Value>",
+                                match state {
+                                    State::Enabled => "enabled",
+                                    State::Disabled => "disabled",
+                                }
+                            ));
+                            continue;
+                        }
+                    },
+                    // Documented ADMX defaults apply only when the element is
+                    // absent, never when a present element is malformed.
+                    (None, State::Enabled) => RegData::Dword(1),
+                    (None, State::Disabled) => RegData::Dword(0),
                 };
                 entries.push(ValueEntry {
                     name: crate::formats::value_name(vn),
@@ -143,12 +164,30 @@ pub fn read(
                 let default_key = list.attr("defaultKey").unwrap_or(key);
                 for item in list.kids("item") {
                     let Some(vn) = item.attr("valueName") else {
+                        losses.push(format!(
+                            "policy {name}: <{list_tag}> item is missing required valueName"
+                        ));
                         continue;
                     };
                     let item_key = item.attr("key").unwrap_or(default_key);
-                    let data = value_of(item.kid("value")).unwrap_or(RegData::Dword(1));
-                    push(
-                        &mut blocks,
+                    let data = match item.kid("value") {
+                        Some(node) => match value_of(Some(node)) {
+                            Some(data) => data,
+                            None => {
+                                losses.push(format!(
+                                    "policy {name}: list item {vn:?} has a malformed or unsupported value"
+                                ));
+                                continue;
+                            }
+                        },
+                        None => {
+                            losses.push(format!(
+                                "policy {name}: list item {vn:?} is missing required <value>"
+                            ));
+                            continue;
+                        }
+                    };
+                    blocks.push(
                         RegPath {
                             hive,
                             sub: item_key.trim_matches('\\').to_string(),
@@ -158,17 +197,18 @@ pub fn read(
                             data,
                             line: 0,
                         },
+                        0,
                     );
                 }
             }
 
             if !entries.is_empty() {
                 for e in entries {
-                    push(&mut blocks, path.clone(), e);
+                    blocks.push(path.clone(), e, 0);
                 }
             } else if p.kid("elements").is_none() && p.kid(list_tag).is_none() {
                 // Nothing concrete at all: still record that the key is involved.
-                block_for(&mut blocks, path.clone());
+                blocks.block_for(path.clone(), 0);
             }
         }
 
@@ -182,9 +222,9 @@ pub fn read(
                 skipped_elements += 1;
             }
             if !described.is_empty() {
-                notes.push(format!(
+                losses.push(format!(
                     "policy {display:?} has {} element(s) whose data an administrator supplies; \
-                     not emitted: {}",
+                     values are unavailable: {}",
                     described.len(),
                     described.join(", ")
                 ));
@@ -216,7 +256,7 @@ pub fn read(
              owns, not what was configured. Read the real settings from a Registry.pol instead."
         ));
     }
-    Ok((blocks, notes))
+    Ok((blocks.into_vec(), notes, losses))
 }
 
 /// `<decimal value="1"/>`, `<longDecimal value="..."/>`, `<string>x</string>`,
@@ -283,7 +323,9 @@ fn load_adml(admx: &Path) -> BTreeMap<String, String> {
         let Ok(bytes) = std::fs::read(&c) else {
             continue;
         };
-        let (text, _) = crate::encoding::decode(&bytes);
+        let Ok((text, _)) = crate::encoding::decode_strict(&bytes) else {
+            continue;
+        };
         let Ok(root) = crate::xml::parse(&text) else {
             continue;
         };
@@ -300,24 +342,6 @@ fn load_adml(admx: &Path) -> BTreeMap<String, String> {
         }
     }
     BTreeMap::new()
-}
-
-fn block_for(blocks: &mut Vec<KeyBlock>, path: RegPath) -> &mut KeyBlock {
-    let fold = path.fold();
-    if let Some(i) = blocks.iter().position(|b| b.path.fold() == fold) {
-        return &mut blocks[i];
-    }
-    blocks.push(KeyBlock {
-        path,
-        delete: false,
-        values: Vec::new(),
-        line: 0,
-    });
-    blocks.last_mut().unwrap()
-}
-
-fn push(blocks: &mut Vec<KeyBlock>, path: RegPath, entry: ValueEntry) {
-    block_for(blocks, path).values.push(entry);
 }
 
 #[cfg(test)]
@@ -351,29 +375,33 @@ mod tests {
 
     #[test]
     fn emits_enabled_and_disabled_values() {
-        let (b, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeEnable")).unwrap();
+        let (b, _, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeEnable")).unwrap();
         assert_eq!(b[0].path.hive, Hive::Hklm);
         assert_eq!(b[0].values[0].data, RegData::Dword(1));
 
-        let (b, _) = read(ADMX.as_bytes(), None, State::Disabled, Some("AcmeEnable")).unwrap();
+        let (b, _, _) = read(ADMX.as_bytes(), None, State::Disabled, Some("AcmeEnable")).unwrap();
         assert_eq!(b[0].values[0].data, RegData::Dword(0));
     }
 
     #[test]
     fn elements_are_reported_never_fabricated() {
-        let (b, notes) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeEnable")).unwrap();
+        let (b, _, losses) =
+            read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeEnable")).unwrap();
         let names: Vec<String> = b[0].values.iter().map(|v| v.name.to_string()).collect();
         assert_eq!(
             names,
             vec!["Enabled"],
             "element values must not be invented"
         );
-        assert!(notes.iter().any(|n| n.contains("ServerUrl")), "{notes:?}");
+        assert!(
+            losses.iter().any(|loss| loss.contains("ServerUrl")),
+            "{losses:?}"
+        );
     }
 
     #[test]
     fn class_both_emits_into_both_hives() {
-        let (b, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeBoth")).unwrap();
+        let (b, _, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeBoth")).unwrap();
         let hives: Vec<Hive> = b.iter().map(|x| x.path.hive).collect();
         assert!(
             hives.contains(&Hive::Hklm) && hives.contains(&Hive::Hkcu),
@@ -383,17 +411,38 @@ mod tests {
 
     #[test]
     fn missing_enabled_value_uses_the_documented_default() {
-        let (b, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeBoth")).unwrap();
+        let (b, _, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeBoth")).unwrap();
         assert_eq!(b[0].values[0].data, RegData::Dword(1));
     }
 
     #[test]
     fn enabled_list_items_may_override_the_key() {
-        let (b, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeList")).unwrap();
+        let (b, _, _) = read(ADMX.as_bytes(), None, State::Enabled, Some("AcmeList")).unwrap();
         let other = b.iter().find(|x| x.path.sub.ends_with("Other")).unwrap();
         assert_eq!(other.values[0].data, RegData::Sz("text".into()));
         let main = b.iter().find(|x| x.path.sub.ends_with("\\L")).unwrap();
         assert_eq!(main.values[0].data, RegData::Dword(7));
+
+        let malformed = br#"
+          <policyDefinitions><policies>
+            <policy name="Broken" class="Machine" key="Software\Policies\Acme">
+              <enabledList>
+                <item><value><decimal value="1"/></value></item>
+                <item valueName="MissingValue"/>
+              </enabledList>
+            </policy>
+          </policies></policyDefinitions>
+        "#;
+        let (b, _, losses) = read(malformed, None, State::Enabled, Some("Broken")).unwrap();
+        assert!(
+            b.is_empty(),
+            "malformed items must not invent writes: {b:?}"
+        );
+        assert!(
+            losses.iter().any(|loss| loss.contains("valueName"))
+                && losses.iter().any(|loss| loss.contains("<value>")),
+            "{losses:?}"
+        );
     }
 
     #[test]

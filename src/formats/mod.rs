@@ -16,8 +16,67 @@ pub mod json;
 pub mod pol;
 
 use crate::model::*;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
+
+pub type ReaderResult = (Vec<KeyBlock>, Vec<String>, Vec<String>);
+
+/// Insertion-ordered key accumulator shared by policy readers.
+///
+/// A linear `Vec::position` lookup made ADMX, GPP and INF parsing quadratic in
+/// the number of distinct registry keys. The side index preserves first-seen
+/// output order and case-insensitive Windows key identity with constant-time
+/// lookup.
+pub(super) struct OrderedBlocks {
+    blocks: Vec<KeyBlock>,
+    index: HashMap<String, usize>,
+}
+
+impl OrderedBlocks {
+    pub(super) fn new() -> Self {
+        Self {
+            blocks: Vec::new(),
+            index: HashMap::new(),
+        }
+    }
+
+    pub(super) fn block_for(&mut self, path: RegPath, line: usize) -> &mut KeyBlock {
+        let fold = path.fold();
+        let index = match self.index.get(&fold) {
+            Some(&index) => index,
+            None => {
+                let index = self.blocks.len();
+                self.blocks.push(KeyBlock {
+                    path,
+                    delete: false,
+                    values: Vec::new(),
+                    line,
+                });
+                self.index.insert(fold, index);
+                index
+            }
+        };
+        &mut self.blocks[index]
+    }
+
+    pub(super) fn push(&mut self, path: RegPath, mut entry: ValueEntry, line: usize) {
+        entry.line = line;
+        self.block_for(path, line).values.push(entry);
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub(super) fn value_count(&self) -> usize {
+        self.blocks.iter().map(|block| block.values.len()).sum()
+    }
+
+    pub(super) fn into_vec(self) -> Vec<KeyBlock> {
+        self.blocks
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
@@ -84,6 +143,9 @@ pub struct ReadOptions {
     pub pol_root: Hive,
     /// Restrict an INF to one `[AddReg]` section instead of every one found.
     pub inf_section: Option<String>,
+    /// Requested Windows LANGID for selecting `[Strings.LanguageID]`.
+    /// `None` deliberately selects the undecorated `[Strings]` section.
+    pub inf_language: Option<u16>,
     /// Which state of an ADMX policy to render. An ADMX declares both.
     pub admx_state: admx::State,
     /// Restrict an ADMX to a single named policy.
@@ -95,6 +157,7 @@ impl Default for ReadOptions {
         ReadOptions {
             pol_root: Hive::Hklm,
             inf_section: None,
+            inf_language: None,
             admx_state: admx::State::Enabled,
             admx_policy: None,
         }
@@ -105,7 +168,20 @@ impl Default for ReadOptions {
 pub struct ReadOutcome {
     pub file: RegFile,
     pub format: Format,
+    pub source_encoding: Option<crate::encoding::SourceEncoding>,
+    pub source_reg_format: Option<RegFormat>,
     pub notes: Vec<String>,
+    /// Source operations that the common registry-data model cannot preserve.
+    ///
+    /// Read-only inspection may still describe the representable subset, but
+    /// mutation and conversion callers must fail closed when this is nonempty.
+    pub losses: Vec<String>,
+    /// Duplicate source operations that resolved to different key/value state.
+    ///
+    /// Readers still return the deterministic last-write-wins model for
+    /// inspection and compatibility, while mutation callers can opt into a
+    /// fail-closed policy without losing the original conflict evidence.
+    pub conflicts: Vec<crate::coalesce::Conflict>,
 }
 
 /// Identify the format of `bytes`, using `path` only as a tie-breaker.
@@ -132,14 +208,21 @@ pub fn detect(bytes: &[u8], path: Option<&Path>) -> Format {
     if trimmed.starts_with('{') || trimmed.starts_with('[') && looks_like_json_array(trimmed) {
         return Format::Json;
     }
-    // Both XML dialects are identified by their root element, not the file name:
-    // GPP files are always called Registry.xml, and an ADMX may be renamed.
+    // Both XML dialects are identified by the parsed root element, not a
+    // substring anywhere in the document. This accepts valid GPP fragments
+    // while an unrelated wrapper cannot impersonate ADMX/GPP by nesting a
+    // familiar-looking element.
     if trimmed.starts_with("<?xml") || trimmed.starts_with('<') {
-        if lower.contains("<policydefinitions") {
-            return Format::Admx;
-        }
-        if lower.contains("<registrysettings") || lower.contains("clsid=\"{9cd4b2f4") {
-            return Format::Gpp;
+        if let Ok(root) = crate::xml::parse(&text) {
+            if root.name.eq_ignore_ascii_case("policyDefinitions") {
+                return Format::Admx;
+            }
+            if root.name.eq_ignore_ascii_case("RegistrySettings")
+                || root.name.eq_ignore_ascii_case("Collection")
+                || root.name.eq_ignore_ascii_case("Registry") && root.kid("Properties").is_some()
+            {
+                return Format::Gpp;
+            }
         }
     }
     // An INF is an INI with a [Version] section and at least one AddReg/DelReg
@@ -203,7 +286,13 @@ pub fn read(
     opts: &ReadOptions,
 ) -> Result<ReadOutcome, String> {
     let format = forced.unwrap_or_else(|| detect(bytes, path));
+    let mut source_encoding = match format {
+        Format::Pol | Format::Hive => None,
+        _ => Some(crate::encoding::source_encoding(bytes)),
+    };
+    let mut source_reg_format = None;
 
+    let mut losses = Vec::new();
     let (keys, mut notes) = match format {
         Format::Reg => {
             let outcome = crate::parser::parse_bytes(bytes);
@@ -221,15 +310,35 @@ pub fn read(
                 .iter()
                 .map(|d| format!("line {}: {}", d.line, d.message))
                 .collect();
+            source_encoding = Some(outcome.file.encoding);
+            source_reg_format = Some(outcome.file.format);
             (outcome.file.keys, notes)
         }
-        Format::Pol => pol::read(bytes, opts.pol_root, path)?,
-        Format::Inf => inf::read(bytes, opts.inf_section.as_deref())?,
+        Format::Pol => {
+            let (keys, notes, pol_losses) = pol::read(bytes, opts.pol_root, path)?;
+            losses = pol_losses;
+            (keys, notes)
+        }
+        Format::Inf => {
+            let (keys, notes, reader_losses) =
+                inf::read(bytes, opts.inf_section.as_deref(), opts.inf_language)?;
+            losses = reader_losses;
+            (keys, notes)
+        }
         Format::Json => json::read(bytes)?,
         Format::Csv => csv::read(bytes)?,
         Format::Ini => ini::read(bytes)?,
-        Format::Admx => admx::read(bytes, path, opts.admx_state, opts.admx_policy.as_deref())?,
-        Format::Gpp => gpp::read(bytes)?,
+        Format::Admx => {
+            let (keys, notes, reader_losses) =
+                admx::read(bytes, path, opts.admx_state, opts.admx_policy.as_deref())?;
+            losses = reader_losses;
+            (keys, notes)
+        }
+        Format::Gpp => {
+            let (keys, notes, reader_losses) = gpp::read(bytes)?;
+            losses = reader_losses;
+            (keys, notes)
+        }
         Format::Hive => {
             return Err(
                 "this is a registry hive file, not a text format. Use `regx hive <FILE> ...` \
@@ -244,7 +353,7 @@ pub fn read(
     let (keys, report) = crate::coalesce::coalesce(keys);
     if report.blocks_merged > 0 {
         notes.push(format!(
-            "merged {} duplicate key block(s), {} value conflict(s) resolved last-write-wins",
+            "merged {} duplicate key block(s), {} semantic conflict(s) resolved last-write-wins",
             report.blocks_merged,
             report.conflicts.len()
         ));
@@ -257,7 +366,11 @@ pub fn read(
             keys,
         },
         format,
+        source_encoding,
+        source_reg_format,
         notes,
+        losses,
+        conflicts: report.conflicts,
     })
 }
 
@@ -320,8 +433,73 @@ mod tests {
     }
 
     #[test]
+    fn xml_detection_uses_the_real_root_and_accepts_gpp_fragments() {
+        let registry = br#"<Registry name="X"><Properties action="U" hive="HKCU"
+          key="Software\Acme" name="X" type="REG_DWORD" value="1"/></Registry>"#;
+        assert_eq!(
+            detect(registry, Some(Path::new("fragment.txt"))),
+            Format::Gpp
+        );
+
+        let collection = br#"<Collection name="Group"><Registry name="X">
+          <Properties action="U" hive="HKCU" key="Software\Acme"
+            name="X" type="REG_DWORD" value="1"/>
+        </Registry></Collection>"#;
+        assert_eq!(
+            detect(collection, Some(Path::new("fragment.txt"))),
+            Format::Gpp
+        );
+
+        let wrapped = br#"<Unrelated><RegistrySettings/></Unrelated>"#;
+        assert_ne!(detect(wrapped, Some(Path::new("wrapped.txt"))), Format::Gpp);
+        let wrapped_admx = br#"<Unrelated><policyDefinitions/></Unrelated>"#;
+        assert_ne!(
+            detect(wrapped_admx, Some(Path::new("wrapped.txt"))),
+            Format::Admx
+        );
+    }
+
+    #[test]
     fn hive_is_refused_with_a_pointer_to_the_right_command() {
         let e = read(b"regf\x00\x00\x00\x00", None, None, &ReadOptions::default()).unwrap_err();
         assert!(e.contains("regx hive"), "{e}");
+    }
+
+    #[test]
+    fn ordered_blocks_scales_and_preserves_first_seen_identity() {
+        let mut blocks = OrderedBlocks::new();
+        for index in 0..10_000 {
+            blocks.push(
+                RegPath::parse(&format!("HKCU\\Software\\Scale\\K{index}")).unwrap(),
+                ValueEntry {
+                    name: ValueName::Named("V".into()),
+                    data: RegData::Dword(index),
+                    line: 0,
+                },
+                index as usize + 1,
+            );
+        }
+        blocks.push(
+            RegPath::parse("hkcu\\software\\scale\\k0").unwrap(),
+            ValueEntry {
+                name: ValueName::Named("Second".into()),
+                data: RegData::Dword(2),
+                line: 0,
+            },
+            10_001,
+        );
+
+        assert_eq!(blocks.len(), 10_000);
+        let blocks = blocks.into_vec();
+        assert_eq!(
+            blocks[0].path.to_string(),
+            "HKEY_CURRENT_USER\\Software\\Scale\\K0"
+        );
+        assert_eq!(blocks[0].values.len(), 2);
+        assert_eq!(blocks[0].values[1].line, 10_001);
+        assert_eq!(
+            blocks.last().unwrap().path.to_string(),
+            "HKEY_CURRENT_USER\\Software\\Scale\\K9999"
+        );
     }
 }

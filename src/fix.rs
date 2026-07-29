@@ -207,7 +207,7 @@ pub fn repair(file: &mut RegFile) -> FixReport {
                 Class::Lossy
             },
             what: format!(
-                "merged {} duplicate key block(s); {} value conflict(s) resolved last-write-wins",
+                "merged {} duplicate key block(s); {} semantic conflict(s) resolved last-write-wins",
                 report.blocks_merged,
                 report.conflicts.len()
             ),

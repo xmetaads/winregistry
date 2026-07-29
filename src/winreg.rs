@@ -23,23 +23,28 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 pub type HKEY = *mut c_void;
+type HANDLE = *mut c_void;
 pub type LSTATUS = i32;
 
 pub const ERROR_SUCCESS: LSTATUS = 0;
 pub const ERROR_FILE_NOT_FOUND: LSTATUS = 2;
 pub const ERROR_ACCESS_DENIED: LSTATUS = 5;
 pub const ERROR_INVALID_HANDLE: LSTATUS = 6;
+pub const ERROR_INVALID_PARAMETER: LSTATUS = 87;
 pub const ERROR_SHARING_VIOLATION: LSTATUS = 32;
 pub const ERROR_MORE_DATA: LSTATUS = 234;
 pub const ERROR_NO_MORE_ITEMS: LSTATUS = 259;
 pub const ERROR_BADDB: LSTATUS = 1009;
+pub const ERROR_NO_UNICODE_TRANSLATION: LSTATUS = 1113;
 
 // The full set of access rights is kept together as documentation of the API
 // surface; not all of them are exercised by the current command set.
 #[allow(dead_code)]
 pub const KEY_QUERY_VALUE: u32 = 0x0001;
-#[allow(dead_code)]
 pub const KEY_SET_VALUE: u32 = 0x0002;
+pub const KEY_CREATE_SUB_KEY: u32 = 0x0004;
+pub const KEY_ENUMERATE_SUB_KEYS: u32 = 0x0008;
+pub const KEY_NOTIFY: u32 = 0x0010;
 pub const KEY_READ: u32 = 0x0002_0019;
 pub const KEY_WRITE: u32 = 0x0002_0006;
 #[allow(dead_code)]
@@ -48,6 +53,7 @@ pub const KEY_WOW64_64KEY: u32 = 0x0100;
 pub const KEY_WOW64_32KEY: u32 = 0x0200;
 #[allow(dead_code)]
 pub const DELETE: u32 = 0x0001_0000;
+pub const READ_CONTROL: u32 = 0x0002_0000;
 
 /// `RegLoadAppKeyW` option: hold the hive exclusively for this process.
 pub const REG_PROCESS_APPKEY: u32 = 0x0000_0001;
@@ -79,6 +85,7 @@ struct FILETIME {
 
 #[link(name = "advapi32")]
 unsafe extern "system" {
+    fn RegConnectRegistryW(machine: *const u16, key: HKEY, out: *mut HKEY) -> LSTATUS;
     fn RegOpenKeyExW(k: HKEY, sub: *const u16, opts: u32, sam: u32, out: *mut HKEY) -> LSTATUS;
     fn RegCreateKeyExW(
         k: HKEY,
@@ -139,7 +146,69 @@ unsafe extern "system" {
         options: u32,
         reserved: u32,
     ) -> LSTATUS;
+    fn RegNotifyChangeKeyValue(
+        k: HKEY,
+        watch_subtree: i32,
+        filter: u32,
+        event: HANDLE,
+        asynchronous: i32,
+    ) -> LSTATUS;
+    fn GetSecurityInfo(
+        handle: HANDLE,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        descriptor: *mut *mut c_void,
+    ) -> u32;
+    fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor: *const c_void,
+        revision: u32,
+        security_info: u32,
+        text: *mut *mut u16,
+        length: *mut u32,
+    ) -> i32;
+    fn ConvertSidToStringSidW(sid: *mut u8, text: *mut *mut u16) -> i32;
+    fn GetSecurityDescriptorControl(
+        descriptor: *const c_void,
+        control: *mut u16,
+        revision: *mut u32,
+    ) -> i32;
 }
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateEventW(
+        attributes: *const c_void,
+        manual_reset: i32,
+        initial_state: i32,
+        name: *const u16,
+    ) -> HANDLE;
+    fn WaitForMultipleObjects(
+        count: u32,
+        handles: *const HANDLE,
+        wait_all: i32,
+        milliseconds: u32,
+    ) -> u32;
+    fn CloseHandle(handle: HANDLE) -> i32;
+    fn GetLastError() -> u32;
+    fn LocalFree(memory: *mut c_void) -> *mut c_void;
+}
+
+const REG_NOTIFY_CHANGE_NAME: u32 = 0x0000_0001;
+const REG_NOTIFY_CHANGE_ATTRIBUTES: u32 = 0x0000_0002;
+const REG_NOTIFY_CHANGE_LAST_SET: u32 = 0x0000_0004;
+const REG_NOTIFY_CHANGE_SECURITY: u32 = 0x0000_0008;
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_TIMEOUT: u32 = 258;
+const SE_REGISTRY_KEY: u32 = 4;
+const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
+const GROUP_SECURITY_INFORMATION: u32 = 0x0000_0002;
+const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+const SDDL_REVISION_1: u32 = 1;
+const SE_DACL_PROTECTED: u16 = 0x1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
@@ -164,7 +233,11 @@ impl fmt::Display for Error {
             ERROR_ACCESS_DENIED => "access denied (this build never elevates - see `regx probe`)",
             ERROR_SHARING_VIOLATION => "the hive file is already loaded or open in another process",
             ERROR_BADDB => "the file is not a valid registry hive",
+            ERROR_NO_UNICODE_TRANSLATION => {
+                "registry name contains malformed UTF-16 and cannot be represented safely"
+            }
             ERROR_INVALID_HANDLE => "invalid handle",
+            ERROR_INVALID_PARAMETER => "invalid parameter",
             _ => "",
         };
         // Plain display, not `{:?}`: a registry path is full of backslashes and
@@ -193,6 +266,68 @@ fn wide(s: &str) -> Vec<u16> {
     let mut v: Vec<u16> = s.encode_utf16().collect();
     v.push(0);
     v
+}
+
+fn checked_subkey(sub: &str, op: &'static str, target: &str) -> Result<Vec<u16>> {
+    if sub.contains('\0') {
+        return Err(invalid_name(op, target, "subkey contains an embedded NUL"));
+    }
+    if sub.chars().any(forbidden_name_control) {
+        return Err(invalid_name(
+            op,
+            target,
+            "subkey contains a control character",
+        ));
+    }
+    if sub
+        .split('\\')
+        .any(|component| component.encode_utf16().count() > 255)
+    {
+        return Err(invalid_name(
+            op,
+            target,
+            "subkey component exceeds 255 UTF-16 code units",
+        ));
+    }
+    Ok(wide(sub))
+}
+
+fn checked_value_name(name: &str, op: &'static str, target: &str) -> Result<Vec<u16>> {
+    if name.contains('\0') {
+        return Err(invalid_name(
+            op,
+            target,
+            "value name contains an embedded NUL",
+        ));
+    }
+    if name.chars().any(forbidden_name_control) {
+        return Err(invalid_name(
+            op,
+            target,
+            "value name contains a control character",
+        ));
+    }
+    if name.encode_utf16().count() > 16_383 {
+        return Err(invalid_name(
+            op,
+            target,
+            "value name exceeds 16,383 UTF-16 code units",
+        ));
+    }
+    Ok(wide(name))
+}
+
+fn forbidden_name_control(character: char) -> bool {
+    let code = character as u32;
+    code < 0x20 || code == 0x7f
+}
+
+fn invalid_name(op: &'static str, target: &str, reason: &str) -> Error {
+    Error {
+        code: ERROR_INVALID_PARAMETER,
+        op,
+        target: format!("{target} ({reason})"),
+    }
 }
 
 fn wide_path(p: &Path) -> Vec<u16> {
@@ -227,6 +362,13 @@ pub struct RegKey {
     label: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityInfo {
+    pub owner_sid: String,
+    pub sddl: String,
+    pub inheritance_enabled: bool,
+}
+
 impl RegKey {
     /// Borrow a predefined root (HKCU, HKLM, ...). Never closed on drop.
     pub fn predefined(h: HKEY, label: &str) -> RegKey {
@@ -237,12 +379,48 @@ impl RegKey {
         }
     }
 
+    /// Connect to one predefined hive on another Windows computer.
+    ///
+    /// Callers deliberately expose this only through read commands. The
+    /// returned handle itself is technically capable of writes when the remote
+    /// ACL permits them, so keeping mutation commands away from it is the
+    /// safety boundary.
+    pub fn connect(computer: &str, root: HKEY, root_label: &str) -> Result<RegKey> {
+        let computer = normalize_computer(computer);
+        if computer.contains('\0') {
+            return Err(invalid_name(
+                "RegConnectRegistry",
+                root_label,
+                "computer name contains an embedded NUL",
+            ));
+        }
+        let w = wide(&computer);
+        let mut out: HKEY = std::ptr::null_mut();
+        // SAFETY: `w` is NUL-terminated and outlives the call; `out` is a valid
+        // result slot. `root` is one of the predefined handles accepted by
+        // RegConnectRegistryW.
+        let rc = unsafe { RegConnectRegistryW(w.as_ptr(), root, &mut out) };
+        let label = format!("{computer}\\{root_label}");
+        if rc != ERROR_SUCCESS {
+            return Err(Error {
+                code: rc,
+                op: "RegConnectRegistry",
+                target: label,
+            });
+        }
+        Ok(RegKey {
+            h: out,
+            owned: true,
+            label,
+        })
+    }
+
     pub fn label(&self) -> &str {
         &self.label
     }
 
     pub fn open(&self, sub: &str, sam: u32, view: View) -> Result<RegKey> {
-        let w = wide(sub);
+        let w = checked_subkey(sub, "RegOpenKeyEx", &self.label)?;
         let mut out: HKEY = std::ptr::null_mut();
         // SAFETY: `w` is NUL-terminated and outlives the call; `out` is a valid
         // writable slot for the returned handle.
@@ -266,7 +444,7 @@ impl RegKey {
     /// `created` distinguishes REG_CREATED_NEW_KEY from REG_OPENED_EXISTING_KEY -
     /// the undo engine needs this to know whether to delete the key on rollback.
     pub fn create(&self, sub: &str, sam: u32, view: View) -> Result<(RegKey, bool)> {
-        let w = wide(sub);
+        let w = checked_subkey(sub, "RegCreateKeyEx", &self.label)?;
         let mut out: HKEY = std::ptr::null_mut();
         let mut disp: u32 = 0;
         // SAFETY: as above; `class`/`sa` are optional and passed as null.
@@ -312,17 +490,21 @@ impl RegKey {
     }
 
     pub fn set_value(&self, name: &str, ty: u32, data: &[u8]) -> Result<()> {
-        let w = wide(name);
+        let w = checked_value_name(name, "RegSetValueEx", &self.label)?;
+        let data_len = u32::try_from(data.len()).map_err(|_| Error {
+            code: ERROR_INVALID_PARAMETER,
+            op: "RegSetValueEx",
+            target: format!("{name} (value data exceeds the Win32 u32 length limit)"),
+        })?;
         // SAFETY: `data`'s pointer/length describe the same slice; an empty slice
         // still yields a valid (dangling but unread) pointer because cb is 0.
-        let rc =
-            unsafe { RegSetValueExW(self.h, w.as_ptr(), 0, ty, data.as_ptr(), data.len() as u32) };
+        let rc = unsafe { RegSetValueExW(self.h, w.as_ptr(), 0, ty, data.as_ptr(), data_len) };
         self.status(rc, "RegSetValueEx", name)
     }
 
     /// Returns `(type, bytes)`, or `None` when the value does not exist.
     pub fn get_value(&self, name: &str) -> Result<Option<(u32, Vec<u8>)>> {
-        let w = wide(name);
+        let w = checked_value_name(name, "RegQueryValueEx", &self.label)?;
         let mut ty: u32 = 0;
         let mut cb: u32 = 0;
         // SAFETY: probe call with a null data pointer is the documented way to
@@ -393,7 +575,7 @@ impl RegKey {
     }
 
     pub fn delete_value(&self, name: &str) -> Result<()> {
-        let w = wide(name);
+        let w = checked_value_name(name, "RegDeleteValue", &self.label)?;
         // SAFETY: NUL-terminated name pointer.
         let rc = unsafe { RegDeleteValueW(self.h, w.as_ptr()) };
         self.status(rc, "RegDeleteValue", name)
@@ -402,14 +584,14 @@ impl RegKey {
     /// Delete an empty subkey. Fails if it still has children - use
     /// [`RegKey::delete_tree`] for the recursive form.
     pub fn delete_key(&self, sub: &str, view: View) -> Result<()> {
-        let w = wide(sub);
+        let w = checked_subkey(sub, "RegDeleteKeyEx", &self.label)?;
         // SAFETY: NUL-terminated subkey pointer.
         let rc = unsafe { RegDeleteKeyExW(self.h, w.as_ptr(), view.flag(), 0) };
         self.status(rc, "RegDeleteKeyEx", sub)
     }
 
     pub fn delete_tree(&self, sub: &str) -> Result<()> {
-        let w = wide(sub);
+        let w = checked_subkey(sub, "RegDeleteTree", &self.label)?;
         // SAFETY: NUL-terminated subkey pointer; empty string means "this key's
         // contents", which RegDeleteTreeW accepts as a null pointer.
         let rc = unsafe {
@@ -447,7 +629,11 @@ impl RegKey {
             };
             match rc {
                 ERROR_SUCCESS => {
-                    out.push(String::from_utf16_lossy(&buf[..cch as usize]));
+                    out.push(decode_registry_name(
+                        &buf[..cch as usize],
+                        "RegEnumKeyEx",
+                        &self.label,
+                    )?);
                     idx += 1;
                 }
                 ERROR_NO_MORE_ITEMS => return Ok(out),
@@ -487,7 +673,8 @@ impl RegKey {
             };
             match rc {
                 ERROR_SUCCESS | ERROR_MORE_DATA => {
-                    let n = String::from_utf16_lossy(&name[..cch as usize]);
+                    let n =
+                        decode_registry_name(&name[..cch as usize], "RegEnumValue", &self.label)?;
                     // Re-read by name: RegEnumValueW's own data buffer has awkward
                     // resize semantics, and get_value already handles growth.
                     let data = self.get_value(&n)?.map(|(_, d)| d).unwrap_or_default();
@@ -514,6 +701,84 @@ impl RegKey {
         self.status(rc, "RegFlushKey", "")
     }
 
+    /// Wait for a change notification without polling. Returns `false` on
+    /// timeout and re-arms on every call, as required by the Win32 API.
+    pub fn wait_for_change(self, recursive: bool, timeout_ms: u32) -> Result<bool> {
+        wait_for_any_change(vec![self], recursive, timeout_ms).map(|index| index.is_some())
+    }
+
+    pub fn security_info(&self) -> Result<SecurityInfo> {
+        let requested =
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        let mut owner = std::ptr::null_mut();
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: output pointers are writable and the returned descriptor is
+        // released with LocalFree below, per GetSecurityInfo's contract.
+        let rc = unsafe {
+            GetSecurityInfo(
+                self.h,
+                SE_REGISTRY_KEY,
+                requested,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if rc != ERROR_SUCCESS as u32 {
+            return Err(Error {
+                code: rc as i32,
+                op: "GetSecurityInfo",
+                target: self.label.clone(),
+            });
+        }
+
+        let converted = (|| {
+            let owner_sid =
+                local_wide_string(|out| unsafe { ConvertSidToStringSidW(owner.cast(), out) })
+                    .ok_or_else(|| Error {
+                        code: unsafe { GetLastError() } as i32,
+                        op: "ConvertSidToStringSid",
+                        target: self.label.clone(),
+                    })?;
+            let sddl = local_wide_string(|out| unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    descriptor,
+                    SDDL_REVISION_1,
+                    requested,
+                    out,
+                    std::ptr::null_mut(),
+                )
+            })
+            .ok_or_else(|| Error {
+                code: unsafe { GetLastError() } as i32,
+                op: "ConvertSecurityDescriptorToStringSecurityDescriptor",
+                target: self.label.clone(),
+            })?;
+            let mut control = 0u16;
+            let mut revision = 0u32;
+            let ok =
+                unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) };
+            if ok == 0 {
+                return Err(Error {
+                    code: unsafe { GetLastError() } as i32,
+                    op: "GetSecurityDescriptorControl",
+                    target: self.label.clone(),
+                });
+            }
+            Ok(SecurityInfo {
+                owner_sid,
+                sddl,
+                inheritance_enabled: control & SE_DACL_PROTECTED == 0,
+            })
+        })();
+        unsafe {
+            LocalFree(descriptor);
+        }
+        converted
+    }
+
     fn status(&self, rc: LSTATUS, op: &'static str, target: &str) -> Result<()> {
         if rc == ERROR_SUCCESS {
             Ok(())
@@ -525,6 +790,123 @@ impl RegKey {
             })
         }
     }
+}
+
+/// Arm several registry notifications and wait for the first one without
+/// polling. The returned index identifies the signalled key; `None` is timeout.
+pub fn wait_for_any_change(
+    keys: Vec<RegKey>,
+    recursive: bool,
+    timeout_ms: u32,
+) -> Result<Option<usize>> {
+    if keys.is_empty() || keys.len() > 64 {
+        return Err(Error {
+            code: 87,
+            op: "WaitForMultipleObjects",
+            target: format!("{} registry notification handle(s)", keys.len()),
+        });
+    }
+    let target = keys
+        .iter()
+        .map(|key| key.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut events = Vec::with_capacity(keys.len());
+    for _ in &keys {
+        // SAFETY: null attributes/name request an unnamed event owned below.
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if event.is_null() {
+            let code = unsafe { GetLastError() } as i32;
+            drop(keys);
+            for event in events {
+                unsafe {
+                    CloseHandle(event);
+                }
+            }
+            return Err(Error {
+                code,
+                op: "CreateEvent",
+                target,
+            });
+        }
+        events.push(event);
+    }
+    let filter = REG_NOTIFY_CHANGE_NAME
+        | REG_NOTIFY_CHANGE_ATTRIBUTES
+        | REG_NOTIFY_CHANGE_LAST_SET
+        | REG_NOTIFY_CHANGE_SECURITY;
+    for (key, event) in keys.iter().zip(events.iter()) {
+        // SAFETY: both handles remain live through the wait and cleanup.
+        let notify = unsafe { RegNotifyChangeKeyValue(key.h, recursive as i32, filter, *event, 1) };
+        if notify != ERROR_SUCCESS {
+            drop(keys);
+            for event in events {
+                unsafe {
+                    CloseHandle(event);
+                }
+            }
+            return Err(Error {
+                code: notify,
+                op: "RegNotifyChangeKeyValue",
+                target,
+            });
+        }
+    }
+    // SAFETY: the event slice is non-empty, contains `count` live handles, and
+    // remains allocated until after this call returns.
+    let event_count = events.len() as u32;
+    let waited = unsafe { WaitForMultipleObjects(event_count, events.as_ptr(), 0, timeout_ms) };
+    // Closing watched keys cancels every still-pending registration. Do this
+    // before closing the events so the kernel can never signal a stale handle.
+    drop(keys);
+    for event in events {
+        unsafe {
+            CloseHandle(event);
+        }
+    }
+    if waited == WAIT_TIMEOUT {
+        Ok(None)
+    } else if waited < WAIT_OBJECT_0 + event_count {
+        Ok(Some((waited - WAIT_OBJECT_0) as usize))
+    } else {
+        Err(Error {
+            code: waited as i32,
+            op: "WaitForMultipleObjects",
+            target,
+        })
+    }
+}
+
+fn decode_registry_name(units: &[u16], op: &'static str, target: &str) -> Result<String> {
+    String::from_utf16(units).map_err(|_| Error {
+        code: ERROR_NO_UNICODE_TRANSLATION,
+        op,
+        target: target.to_string(),
+    })
+}
+
+fn normalize_computer(computer: &str) -> String {
+    let trimmed = computer.trim().trim_start_matches('\\');
+    format!(r"\\{trimmed}")
+}
+
+fn local_wide_string(convert: impl FnOnce(*mut *mut u16) -> i32) -> Option<String> {
+    let mut raw = std::ptr::null_mut();
+    if convert(&mut raw) == 0 || raw.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    // SAFETY: conversion APIs return a NUL-terminated LocalAlloc string.
+    unsafe {
+        while *raw.add(len) != 0 {
+            len += 1;
+        }
+    }
+    let text = unsafe { String::from_utf16(std::slice::from_raw_parts(raw, len)).ok() };
+    unsafe {
+        LocalFree(raw.cast());
+    }
+    text
 }
 
 impl fmt::Debug for RegKey {
@@ -599,6 +981,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn multi_wait_rejects_an_empty_handle_set() {
+        let error = wait_for_any_change(Vec::new(), false, 0).unwrap_err();
+        assert_eq!(error.op, "WaitForMultipleObjects");
+    }
+
+    #[test]
     fn hkcu_is_readable_and_enumerable() {
         let root = RegKey::predefined(hkey_current_user(), "HKEY_CURRENT_USER");
         let sw = root.open("Software", KEY_READ, View::Native).unwrap();
@@ -606,8 +994,81 @@ mod tests {
     }
 
     #[test]
+    fn remote_computer_names_are_normalized_once() {
+        assert_eq!(normalize_computer("server"), r"\\server");
+        assert_eq!(normalize_computer(r"\\server"), r"\\server");
+        assert_eq!(normalize_computer(r"\server"), r"\\server");
+    }
+
+    #[test]
+    fn malformed_registry_names_are_errors_not_replacement_text() {
+        let error = decode_registry_name(&[0xd800], "RegEnumValue", "HKCU\\Software").unwrap_err();
+        assert_eq!(error.code, ERROR_NO_UNICODE_TRANSLATION);
+        assert!(error.to_string().contains("malformed UTF-16"));
+        assert!(!error.to_string().contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn live_enumeration_refuses_a_native_malformed_value_name() {
+        let file =
+            std::env::temp_dir().join(format!("regx-malformed-name-{}.hiv", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let session = crate::hive::open(&file, true, true, true).unwrap();
+        let path = crate::model::RegPath::parse("HKCU").unwrap();
+        let (key, _) = session.roots.resolve(&path);
+        let malformed_name = [0xd800, 0];
+        let data = [1u8, 2, 3];
+        // SAFETY: all buffers remain alive for the call. Win32 accepts UTF-16
+        // code units here; this deliberately bypasses regx's String boundary
+        // to model a malformed name left by native software.
+        let status = unsafe {
+            RegSetValueExW(
+                key.h,
+                malformed_name.as_ptr(),
+                0,
+                crate::model::REG_BINARY,
+                data.as_ptr(),
+                data.len() as u32,
+            )
+        };
+        if status == ERROR_SUCCESS {
+            let error = key.values().unwrap_err();
+            assert_eq!(error.code, ERROR_NO_UNICODE_TRANSLATION);
+        } else {
+            panic!("native malformed-name setup failed with error {status}");
+        }
+        drop(session);
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn rejects_names_win32_would_truncate_or_cannot_represent() {
+        let nul_key = checked_subkey("Software\\Safe\0Hidden", "test", "HKCU").unwrap_err();
+        assert_eq!(nul_key.code, ERROR_INVALID_PARAMETER);
+        assert!(nul_key.to_string().contains("embedded NUL"));
+
+        let long_component = "😀".repeat(128); // 256 UTF-16 code units.
+        let long_key = checked_subkey(&long_component, "test", "HKCU").unwrap_err();
+        assert!(long_key.to_string().contains("255 UTF-16"));
+
+        let nul_value = checked_value_name("Visible\0Hidden", "test", "HKCU").unwrap_err();
+        assert!(nul_value.to_string().contains("embedded NUL"));
+
+        let control_value = checked_value_name("Visible\nHidden", "test", "HKCU").unwrap_err();
+        assert!(control_value.to_string().contains("control character"));
+
+        let long_value = "x".repeat(16_384);
+        let long_value = checked_value_name(&long_value, "test", "HKCU").unwrap_err();
+        assert!(long_value.to_string().contains("16,383 UTF-16"));
+    }
+
+    #[test]
     fn round_trips_a_value_in_a_scratch_key() {
         let root = RegKey::predefined(hkey_current_user(), "HKEY_CURRENT_USER");
+        if root.open("Software", KEY_WRITE, View::Native).is_err() {
+            eprintln!("SKIPPED: HKCU\\Software is not writable on this host");
+            return;
+        }
         let path = "Software\\regx-selftest";
         let (k, _) = root
             .create(path, KEY_READ | KEY_WRITE, View::Native)

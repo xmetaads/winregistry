@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winregistry.org/schemas/saved-plan-v1.json",
+  "title": "regx saved plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "payloadSha256", "payload"],
+  "properties": {
+    "schema": {
+      "const": "https://winregistry.org/schemas/saved-plan-v1.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "payloadSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool",
+        "toolVersion",
+        "prune",
+        "pruneKeys",
+        "sources",
+        "views"
+      ],
+      "properties": {
+        "tool": { "const": "regx" },
+        "toolVersion": { "type": "string", "minLength": 1 },
+        "prune": { "type": "boolean" },
+        "pruneKeys": { "type": "boolean" },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "view",
+              "desiredDigest",
+              "currentDigest",
+              "desired"
+            ],
+            "properties": {
+              "view": {
+                "enum": ["native", "32", "64"]
+              },
+              "desiredDigest": { "$ref": "#/$defs/sha256" },
+              "currentDigest": { "$ref": "#/$defs/sha256" },
+              "desired": {
+                "type": "object",
+                "required": ["keys"],
+                "properties": {
+                  "keys": { "type": "array" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

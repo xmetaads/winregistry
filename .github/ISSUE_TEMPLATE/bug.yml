@@ -1,0 +1,62 @@
+name: Bug report
+description: Report reproducible incorrect behavior in regx or winregistry.org.
+title: "[Bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include secrets here. Use the private
+        security advisory link instead.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - regx command-line application
+        - winregistry.org website
+        - CI, release, or packaging
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Paste `regx --version`, or the website URL and observed date.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows environment
+      description: Edition, build, architecture, and whether the shell is elevated.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Exact commands and the smallest non-secret input.
+      render: powershell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include stdout, stderr, and the numeric exit code.
+    validations:
+      required: true
+  - type: textarea
+    id: selfcheck
+    attributes:
+      label: Self-check
+      description: Paste `regx --self-check --output json` after removing sensitive paths.
+      render: json
+

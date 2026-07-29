@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\regx-fuzz]
+"Text"="hello"
+"Number"=dword:0000002a
+"Bytes"=hex:00,01,02,ff

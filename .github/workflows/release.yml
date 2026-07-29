@@ -9,16 +9,37 @@ on:
         description: Tag to build (must already exist)
         required: true
 
-permissions:
-  contents: write
-  # Required for the build provenance attestation below.
-  id-token: write
-  attestations: write
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Verify release identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Tag, package version, commit and changelog agree
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: >-
+          python3 scripts/check_release_identity.py "$RELEASE_TAG"
+          --require-git-tag
+
   build:
     name: Build ${{ matrix.arch }}
+    needs: preflight
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +52,7 @@ jobs:
             needs_toolchain: true
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           # The build embeds the commit and its date, so the full history has
@@ -72,7 +93,22 @@ jobs:
               throw "$dll is imported: the CRT is not statically linked"
             }
           }
-          "asInvoker, no elevation, static CRT"
+          $bytes = (Get-Item $exe).Length
+          $limit = 2 * 1MB
+          if ($bytes -ge $limit) {
+            throw "release binary is $bytes bytes; website contract requires less than 2 MiB ($limit bytes)"
+          }
+          $binary = [IO.File]::ReadAllBytes($exe)
+          $peOffset = [BitConverter]::ToInt32($binary, 0x3c)
+          if ($peOffset -lt 0 -or $peOffset + 6 -gt $binary.Length) {
+            throw "invalid PE header offset"
+          }
+          $machine = [BitConverter]::ToUInt16($binary, $peOffset + 4)
+          $expectedMachine = if ("${{ matrix.arch }}" -eq "x86_64") { 0x8664 } else { 0xAA64 }
+          if ($machine -ne $expectedMachine) {
+            throw "PE machine 0x$($machine.ToString('X4')) does not match ${{ matrix.arch }}"
+          }
+          "asInvoker, no elevation, static CRT, PE machine 0x$($machine.ToString('X4'))"
 
       # Signing is the single largest barrier to enterprise adoption: AppLocker
       # and WDAC judge a publisher, and an unsigned binary is blocked no matter
@@ -80,12 +116,21 @@ jobs:
       # certificate is configured, so enabling it is a secrets change, not a
       # workflow change.
       - name: Sign
-        if: env.SIGNING_CERT != ''
         env:
           SIGNING_CERT: ${{ secrets.SIGNING_CERT_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         shell: pwsh
         run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERT)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:SIGNING_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw "signing is partially configured: both certificate and password secrets are required"
+          }
+          if (-not $hasCertificate) {
+            "signing secrets are not configured; unsigned-preview policy is checked next"
+            exit 0
+          }
+
           $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT))
           try {
@@ -96,20 +141,29 @@ jobs:
               "target/${{ matrix.target }}/release/regx.exe"
             if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
             & signtool verify /pa /v "target/${{ matrix.target }}/release/regx.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed" }
           } finally {
             Remove-Item $pfx -Force -ErrorAction SilentlyContinue
           }
 
       - name: Report signing status
+        env:
+          ALLOW_UNSIGNED_PREVIEW: ${{ vars.ALLOW_UNSIGNED_PREVIEW }}
         shell: pwsh
         run: |
           $sig = Get-AuthenticodeSignature "target/${{ matrix.target }}/release/regx.exe"
           if ($sig.Status -eq "Valid") {
             "signed: $($sig.SignerCertificate.Subject)"
+          } elseif ($sig.Status -eq "NotSigned" -and $env:ALLOW_UNSIGNED_PREVIEW -eq "true") {
+            "::warning::This release is explicitly allowed as an UNSIGNED preview. " +
+            "AppLocker, WDAC and SmartScreen may block or warn on it."
+          } elseif ($sig.Status -ne "NotSigned") {
+            throw "release has an invalid Authenticode state ($($sig.Status)); " +
+              "ALLOW_UNSIGNED_PREVIEW never permits a broken or untrusted signature"
           } else {
-            "::warning::This release is UNSIGNED ($($sig.Status)). AppLocker, WDAC and " +
-            "SmartScreen will block or warn on it. Configure SIGNING_CERT_BASE64 and " +
-            "SIGNING_CERT_PASSWORD to sign."
+            throw "unsigned release blocked. Configure SIGNING_CERT_BASE64 and " +
+              "SIGNING_CERT_PASSWORD, or explicitly set repository variable " +
+              "ALLOW_UNSIGNED_PREVIEW=true for a preview release."
           }
 
       - name: Stage artifacts
@@ -124,76 +178,105 @@ jobs:
           "$name  $h"
 
       - name: Build provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: dist/regx-${{ matrix.arch }}.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: regx-${{ matrix.arch }}
           path: dist/*
 
   sbom:
     name: SBOM
+    needs: preflight
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       # A software bill of materials is a procurement checklist item, and with
-      # two direct dependencies it is short enough to actually read.
+      # five direct Rust dependencies it is short enough to actually read.
       - name: Generate CycloneDX SBOM
         run: |
-          cargo install cargo-cyclonedx --locked
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version 0.5.9
           cargo cyclonedx --format json --spec-version 1.5
           mkdir -p dist
-          find . -name "*.cdx.json" -exec cp {} dist/regx.cdx.json \;
+          mapfile -d '' SBOMS < <(find . -path ./dist -prune -o -name "*.cdx.json" -type f -print0)
+          if [ "${#SBOMS[@]}" -ne 1 ]; then
+            printf 'expected exactly one generated CycloneDX document, found %s\n' "${#SBOMS[@]}" >&2
+            printf '  %s\n' "${SBOMS[@]}" >&2
+            exit 1
+          fi
+          cp "${SBOMS[0]}" dist/regx.cdx.json
           test -s dist/regx.cdx.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: sbom
           path: dist/regx.cdx.json
 
   publish:
     name: Publish
-    needs: [build, sbom]
+    needs: [preflight, build, sbom]
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: artifacts
 
       - name: Collect and combine checksums
         run: |
+          set -euo pipefail
           mkdir -p dist
-          find artifacts -type f \( -name "*.exe" -o -name "*.cdx.json" \) -exec cp {} dist/ \;
+          for name in regx-x86_64.exe regx-aarch64.exe regx.cdx.json; do
+            mapfile -d '' MATCHES < <(find artifacts -type f -name "$name" -print0)
+            if [ "${#MATCHES[@]}" -ne 1 ]; then
+              printf 'expected exactly one %s artifact, found %s\n' "$name" "${#MATCHES[@]}" >&2
+              printf '  %s\n' "${MATCHES[@]}" >&2
+              exit 1
+            fi
+            cp "${MATCHES[0]}" "dist/$name"
+          done
+          mapfile -d '' UNEXPECTED < <(
+            find artifacts -type f \( -name "*.exe" -o -name "*.cdx.json" \) \
+              ! -name "regx-x86_64.exe" ! -name "regx-aarch64.exe" ! -name "regx.cdx.json" -print0
+          )
+          if [ "${#UNEXPECTED[@]}" -ne 0 ]; then
+            printf 'unexpected release artifact(s):\n' >&2
+            printf '  %s\n' "${UNEXPECTED[@]}" >&2
+            exit 1
+          fi
           cd dist
           sha256sum *.exe *.cdx.json > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Extract the release notes for this tag
-        id: notes
-        run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
-          # Everything between this version's heading and the next one.
-          # index() rather than a regex: the heading contains [ and ], and
-          # escaping those inside a shell-quoted awk program is how this
-          # silently produced empty notes the first time.
-          awk -v head="## [${TAG#v}]" '
-            index($0, head) == 1 { on = 1; next }
-            on && index($0, "## [") == 1 { exit }
-            on { print }
-          ' CHANGELOG.md > dist/NOTES.md
-          if [ ! -s dist/NOTES.md ]; then
-            echo "No CHANGELOG entry for $TAG." > dist/NOTES.md
-          fi
-          cat dist/NOTES.md
+      - name: Validate the complete release asset contract
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: python3 scripts/check_release_assets.py dist "$RELEASE_TAG"
+
+      - name: Revalidate identity and extract the same release notes
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: >-
+          python3 scripts/check_release_identity.py "$RELEASE_TAG"
+          --require-git-tag --notes-out dist/NOTES.md
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           body_path: dist/NOTES.md

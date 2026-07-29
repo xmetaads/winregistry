@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winregistry.org/schemas/copy-plan-v2.json",
+  "title": "regx digest-bound subtree/value copy/move plan v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "payloadSha256", "payload"],
+  "properties": {
+    "schema": { "const": "https://winregistry.org/schemas/copy-plan-v2.json" },
+    "schemaVersion": { "const": 2 },
+    "payloadSha256": { "$ref": "#/$defs/sha256" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool", "toolVersion", "operation", "view", "sourceComputer",
+        "source", "destination", "scope", "sourceValue", "destinationValue",
+        "overwrite", "sourceDigest", "currentDigest", "copyDigest",
+        "deleteDigest", "copy", "removeSource"
+      ],
+      "properties": {
+        "tool": { "const": "regx" },
+        "toolVersion": { "type": "string", "minLength": 1 },
+        "operation": { "enum": ["copy", "move"] },
+        "view": { "enum": ["native", "32", "64"] },
+        "sourceComputer": { "type": ["string", "null"], "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "destination": { "type": "string", "minLength": 1 },
+        "scope": { "enum": ["subtree", "value"] },
+        "sourceValue": { "type": ["string", "null"] },
+        "destinationValue": { "type": ["string", "null"] },
+        "overwrite": { "type": "boolean" },
+        "sourceDigest": { "$ref": "#/$defs/sha256" },
+        "currentDigest": { "$ref": "#/$defs/sha256" },
+        "copyDigest": { "$ref": "#/$defs/sha256" },
+        "deleteDigest": { "$ref": "#/$defs/sha256" },
+        "copy": { "$ref": "#/$defs/registry" },
+        "removeSource": { "$ref": "#/$defs/registry" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "scope": { "const": "subtree" } } },
+          "then": {
+            "properties": {
+              "sourceValue": { "type": "null" },
+              "destinationValue": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scope": { "const": "value" } } },
+          "then": {
+            "properties": {
+              "sourceValue": { "type": "string" },
+              "destinationValue": { "type": "string" }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys"],
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "delete", "values"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "delete": { "type": "boolean" },
+              "values": { "type": "array" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

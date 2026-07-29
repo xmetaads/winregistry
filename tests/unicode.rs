@@ -49,6 +49,18 @@ fn code(o: &Output) -> i32 {
     o.status.code().expect("terminated by signal")
 }
 
+fn skip_if_hkcu_not_writable(what: &str) -> bool {
+    let probe = run(&["probe", "HKCU\\Software", "--output", "json"]);
+    if code(&probe) == OK {
+        return false;
+    }
+    eprintln!(
+        "SKIPPED: {what} - HKCU\\Software is not writable in this host: {}",
+        stdout(&probe)
+    );
+    true
+}
+
 /// stdout decoded as UTF-8. The manifest sets activeCodePage=UTF-8, so the
 /// process emits UTF-8 regardless of the machine's ANSI codepage — that is
 /// precisely what is being checked.
@@ -107,6 +119,9 @@ impl Drop for LiveKey {
 
 #[test]
 fn non_ascii_values_survive_the_live_registry() {
+    if skip_if_hkcu_not_writable("Unicode live value round trips") {
+        return;
+    }
     for (label, text) in SAMPLES {
         let key = LiveKey::new(label);
 
@@ -125,6 +140,9 @@ fn non_ascii_values_survive_the_live_registry() {
 
 #[test]
 fn non_ascii_key_names_survive_the_live_registry() {
+    if skip_if_hkcu_not_writable("Unicode live key round trips") {
+        return;
+    }
     for (label, text) in SAMPLES {
         let base = LiveKey::new(label);
         let nested = format!("{}\\{text}", base.as_str());
@@ -144,6 +162,9 @@ fn non_ascii_key_names_survive_the_live_registry() {
 
 #[test]
 fn non_ascii_survives_a_reg_export_and_reimport() {
+    if skip_if_hkcu_not_writable("Unicode live reg export/import") {
+        return;
+    }
     let sc = Scratch::new("regfile");
     for (label, text) in SAMPLES {
         let key = LiveKey::new(&format!("reg-{label}"));
@@ -238,6 +259,9 @@ fn non_ascii_survives_every_text_format() {
 
 #[test]
 fn non_ascii_reaches_the_audit_log_intact() {
+    if skip_if_hkcu_not_writable("Unicode live audit log") {
+        return;
+    }
     let sc = Scratch::new("audit");
     let key = LiveKey::new("audit");
     let log = sc.path("audit.jsonl");
@@ -307,6 +331,9 @@ fn case_insensitive_matching_holds_for_non_ascii() {
 
 #[test]
 fn a_non_ascii_key_can_be_deleted_by_a_differently_cased_name() {
+    if skip_if_hkcu_not_writable("Unicode live case-insensitive deletion") {
+        return;
+    }
     let key = LiveKey::new("delcase");
     let base = key.as_str().to_string();
     let sub = format!("{base}\\Программа");
@@ -325,6 +352,9 @@ fn a_non_ascii_key_can_be_deleted_by_a_differently_cased_name() {
 
 #[test]
 fn expanding_case_mappings_do_not_merge_distinct_keys() {
+    if skip_if_hkcu_not_writable("Unicode expanding-case live keys") {
+        return;
+    }
     // Windows uppercases a registry path one character at a time, so a mapping
     // that would expand — ß to SS, the ﬁ ligature to FI — is not applied, and
     // these are two different keys. Folding with `str::to_uppercase` made regx
@@ -374,6 +404,9 @@ fn expanding_case_mappings_do_not_merge_distinct_keys() {
 
 #[test]
 fn astral_plane_text_is_not_truncated_at_the_surrogate() {
+    if skip_if_hkcu_not_writable("astral-plane live registry text") {
+        return;
+    }
     // A character outside the BMP is two UTF-16 units. Any code that counts
     // characters where it should count units, or vice versa, loses half of it.
     let key = LiveKey::new("astral");
@@ -411,6 +444,9 @@ fn astral_plane_text_is_not_truncated_at_the_surrogate() {
 
 #[test]
 fn json_output_escapes_non_ascii_without_losing_it() {
+    if skip_if_hkcu_not_writable("Unicode live JSON output") {
+        return;
+    }
     let key = LiveKey::new("json");
     let text = "Cấu hình 设置";
     run(&["set", key.as_str(), "-v", "Name", "-d", text, "-y"]);

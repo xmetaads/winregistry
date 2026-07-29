@@ -1,0 +1,44 @@
+[package]
+name = "regx-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[features]
+fuzzing = []
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "reg_bytes"
+path = "fuzz_targets/reg_bytes.rs"
+test = false
+doc = false
+bench = false
+required-features = ["fuzzing"]
+
+[[bin]]
+name = "xml_bytes"
+path = "fuzz_targets/xml_bytes.rs"
+test = false
+doc = false
+bench = false
+required-features = ["fuzzing"]
+
+[[bin]]
+name = "all_formats"
+path = "fuzz_targets/all_formats.rs"
+test = false
+doc = false
+bench = false
+required-features = ["fuzzing"]
+
+[profile.release]
+debug = 1

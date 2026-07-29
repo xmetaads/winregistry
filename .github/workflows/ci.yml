@@ -15,12 +15,15 @@ env:
   # product promises. Warnings are denied per-command instead, and the static
   # link is asserted below rather than assumed.
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (x64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # No toolchain is named here on purpose: rustup reads rust-toolchain.toml,
       # which pins the exact version. Passing `stable` would override the pin and
@@ -31,7 +34,7 @@ jobs:
           rustc --version
           cargo clippy --version
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       - name: Format
         run: cargo fmt --all --check
@@ -108,8 +111,30 @@ jobs:
           }
           "CRT: statically linked"
 
-          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+          $bytes = (Get-Item $exe).Length
+          $limit = 2 * 1MB
+          if ($bytes -ge $limit) {
+            throw "release binary is $bytes bytes; website contract requires less than 2 MiB ($limit bytes)"
+          }
+          $mb = [math]::Round($bytes / 1MB, 2)
           "size: $mb MB"
+
+      - name: Verify a fresh relink is reproducible
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $first = Join-Path $env:RUNNER_TEMP "regx-first.exe"
+          Copy-Item target/release/regx.exe $first
+          cargo clean --release -p regx
+          cargo build --release
+          if ($LASTEXITCODE -ne 0) { throw "fresh release relink failed" }
+
+          $firstHash = (Get-FileHash $first -Algorithm SHA256).Hash.ToLower()
+          $secondHash = (Get-FileHash target/release/regx.exe -Algorithm SHA256).Hash.ToLower()
+          if ($firstHash -ne $secondHash) {
+            throw "release build is not reproducible: $firstHash != $secondHash"
+          }
+          "reproducible SHA-256: $secondHash"
 
       - name: SHA-256
         shell: pwsh
@@ -117,7 +142,7 @@ jobs:
           $h = (Get-FileHash target/release/regx.exe -Algorithm SHA256).Hash.ToLower()
           "$h  regx.exe" | Tee-Object -FilePath target/release/regx.exe.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: regx-x86_64
           path: |
@@ -128,8 +153,8 @@ jobs:
     name: Test (standard user)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       # windows-latest runs elevated, so the assertions that define this product
       # — an HKLM write is refused, System32 is not writable, the process never
@@ -241,8 +266,8 @@ jobs:
     name: Signing pipeline
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       - name: Build
         run: cargo build --release
@@ -369,8 +394,8 @@ jobs:
     name: Build (ARM64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       # The runner does not ship the ARM64 MSVC linker, and without it the
       # target fails to link. Installing it is what makes an ARM64 claim in the
@@ -397,7 +422,7 @@ jobs:
           $h = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           "$h  regx.exe" | Tee-Object -FilePath "$exe.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: regx-aarch64
           path: |
@@ -408,12 +433,11 @@ jobs:
     name: Supply chain
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Two questions procurement always asks: is anything known-vulnerable,
       # and is every licence acceptable to redistribute?
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
         with:
           command: check
 
@@ -421,10 +445,24 @@ jobs:
     name: Site checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Links, anchors, contrast and CSP-safe markup
-        run: python3 scripts/check_site.py
+        run: |
+          python3 scripts/check_site.py --self-test
+          python3 scripts/check_site.py
 
       - name: vercel.json stays consistent with the pages
         run: python3 scripts/check_vercel.py
+
+      - name: Deployed-site verifier reports transport failures cleanly
+        run: python3 scripts/check_deployed_site.py --self-test
+
+      - name: Workflow actions stay immutable
+        run: python3 scripts/check_workflows.py
+
+      - name: Release asset validator accepts good and rejects bad fixtures
+        run: python3 scripts/check_release_assets.py --self-test
+
+      - name: Release identity validator accepts good and rejects bad fixtures
+        run: python3 scripts/check_release_identity.py --self-test

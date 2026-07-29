@@ -11,7 +11,7 @@
 //!     There is NO `\n`, `\t`, or `\0` - writing one produces a literal backslash.
 //!   * A key name may itself contain `]`, so the terminator is the LAST `]`.
 
-use crate::encoding::{decode, SourceEncoding};
+use crate::encoding::{decode_strict, source_encoding, SourceEncoding};
 use crate::model::*;
 
 #[derive(Debug)]
@@ -42,8 +42,21 @@ impl ParseOutcome {
 }
 
 pub fn parse_bytes(bytes: &[u8]) -> ParseOutcome {
-    let (text, encoding) = decode(bytes);
-    parse_str(&text, encoding)
+    match decode_strict(bytes) {
+        Ok((text, encoding)) => parse_str(&text, encoding),
+        Err(message) => ParseOutcome {
+            file: RegFile {
+                format: RegFormat::V5,
+                encoding: source_encoding(bytes),
+                keys: Vec::new(),
+            },
+            diagnostics: vec![Diagnostic {
+                line: 0,
+                severity: Severity::Error,
+                message,
+            }],
+        },
+    }
 }
 
 pub fn parse_str(text: &str, encoding: SourceEncoding) -> ParseOutcome {
@@ -211,8 +224,12 @@ impl Parser {
 
         // Real limit enforced by the API; catching it here beats a cryptic
         // ERROR_INVALID_PARAMETER at write time.
-        if path.sub.split('\\').any(|c| c.chars().count() > 255) {
-            self.warn(line, "a key name component exceeds 255 characters");
+        if path
+            .sub
+            .split('\\')
+            .any(|component| component.encode_utf16().count() > 255)
+        {
+            self.warn(line, "a key name component exceeds 255 UTF-16 code units");
         }
 
         self.flush_key();
@@ -336,7 +353,7 @@ impl Parser {
     fn check_hex_shape(&mut self, line: usize, ty: u32, bytes: &[u8]) {
         match ty {
             REG_SZ | REG_EXPAND_SZ | REG_LINK => {
-                if bytes.len() % 2 != 0 {
+                if !bytes.len().is_multiple_of(2) {
                     self.warn(
                         line,
                         "string payload has an odd byte count (not valid UTF-16LE)",
@@ -349,7 +366,7 @@ impl Parser {
                 }
             }
             REG_MULTI_SZ => {
-                if bytes.len() % 2 != 0 {
+                if !bytes.len().is_multiple_of(2) {
                     self.warn(line, "REG_MULTI_SZ payload has an odd byte count");
                 } else if !bytes.ends_with(&[0, 0, 0, 0]) && !bytes.is_empty() {
                     self.warn(
@@ -404,8 +421,11 @@ fn parse_value_name(s: &str) -> Result<(ValueName, &str), String> {
     }
     if s.starts_with('"') {
         let (name, tail) = unquote(s)?;
-        if name.chars().count() > 16_383 {
-            return Err("value name exceeds the 16,383 character limit".into());
+        if name.contains('\0') {
+            return Err("value name contains an embedded NUL".into());
+        }
+        if name.encode_utf16().count() > 16_383 {
+            return Err("value name exceeds the 16,383 UTF-16 code-unit limit".into());
         }
         return Ok((ValueName::Named(name), tail.trim_start()));
     }
@@ -506,5 +526,35 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("double NUL")));
+    }
+
+    #[test]
+    fn rejects_embedded_nul_and_counts_win32_utf16_limits() {
+        let key = parse(
+            "Windows Registry Editor Version 5.00\r\n\
+             [HKEY_CURRENT_USER\\Visible\0Hidden]\r\n",
+        );
+        assert!(key.has_errors());
+        assert!(key.file.keys.is_empty());
+
+        let value = parse(
+            "Windows Registry Editor Version 5.00\r\n\
+             [HKEY_CURRENT_USER\\A]\r\n\
+             \"Visible\0Hidden\"=\"x\"\r\n",
+        );
+        assert!(value.has_errors());
+        assert!(value.file.keys[0].values.is_empty());
+
+        let too_long = "😀".repeat(8_192); // 16,384 UTF-16 code units.
+        let value = parse(&format!(
+            "Windows Registry Editor Version 5.00\r\n\
+             [HKEY_CURRENT_USER\\A]\r\n\
+             \"{too_long}\"=\"x\"\r\n"
+        ));
+        assert!(value.has_errors());
+        assert!(value
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("16,383 UTF-16")));
     }
 }

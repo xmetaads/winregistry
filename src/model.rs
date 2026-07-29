@@ -50,6 +50,9 @@ pub struct RegPath {
 impl RegPath {
     pub fn parse(raw: &str) -> Option<RegPath> {
         let raw = raw.trim();
+        if raw.contains('\0') {
+            return None;
+        }
         let (head, rest) = match raw.split_once('\\') {
             Some((h, r)) => (h, r),
             None => (raw, ""),
@@ -177,38 +180,62 @@ impl RegData {
             RegData::Sz(s) => s.clone(),
             RegData::Dword(v) => format!("0x{v:08x} ({v})"),
             RegData::Hex { ty, bytes } => match *ty {
-                REG_EXPAND_SZ | REG_SZ | REG_LINK => utf16_from_bytes(bytes).join(""),
-                REG_MULTI_SZ => utf16_from_bytes(bytes).join(" | "),
+                REG_EXPAND_SZ | REG_SZ | REG_LINK => strict_utf16_strings(bytes)
+                    .filter(|parts| bytes.ends_with(&[0, 0]) && parts.len() <= 1)
+                    .map(|parts| parts.join(""))
+                    .unwrap_or_else(|| hex_preview(bytes)),
+                REG_MULTI_SZ => strict_utf16_strings(bytes)
+                    .filter(|_| bytes.ends_with(&[0, 0, 0, 0]))
+                    .map(|parts| parts.join(" | "))
+                    .unwrap_or_else(|| hex_preview(bytes)),
                 REG_QWORD if bytes.len() == 8 => {
                     let mut a = [0u8; 8];
                     a.copy_from_slice(bytes);
                     let v = u64::from_le_bytes(a);
                     format!("0x{v:016x} ({v})")
                 }
-                _ => {
-                    let head: Vec<String> =
-                        bytes.iter().take(16).map(|b| format!("{b:02x}")).collect();
-                    let more = if bytes.len() > 16 { " ..." } else { "" };
-                    format!("{}{} [{} bytes]", head.join(" "), more, bytes.len())
-                }
+                _ => hex_preview(bytes),
             },
         }
     }
+}
+
+fn hex_preview(bytes: &[u8]) -> String {
+    let head: Vec<String> = bytes
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let more = if bytes.len() > 16 { " ..." } else { "" };
+    format!("{}{} [{} bytes]", head.join(" "), more, bytes.len())
 }
 
 /// Decode UTF-16LE bytes into NUL-separated strings, dropping the terminator.
 /// Handles the classic bug source: MULTI_SZ is double-NUL terminated, and a
 /// missing terminator means the consuming app reads garbage past the value.
 pub fn utf16_from_bytes(bytes: &[u8]) -> Vec<String> {
+    strict_utf16_strings(bytes).unwrap_or_default()
+}
+
+fn strict_utf16_strings(bytes: &[u8]) -> Option<Vec<String>> {
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .chunks(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
-    units
-        .split(|&u| u == 0)
-        .filter(|s| !s.is_empty())
-        .map(String::from_utf16_lossy)
-        .collect()
+    let mut decoded = Vec::new();
+    for part in units
+        .split(|&unit| unit == 0)
+        .filter(|part| !part.is_empty())
+    {
+        let Ok(text) = String::from_utf16(part) else {
+            return None;
+        };
+        decoded.push(text);
+    }
+    Some(decoded)
 }
 
 #[derive(Clone, Debug)]
@@ -225,6 +252,47 @@ pub struct KeyBlock {
     pub delete: bool,
     pub values: Vec<ValueEntry>,
     pub line: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_like_hex_preview_never_invents_malformed_unicode() {
+        let malformed_surrogate = RegData::Hex {
+            ty: REG_EXPAND_SZ,
+            bytes: vec![0x00, 0xd8, 0x00, 0x00],
+        };
+        let odd = RegData::Hex {
+            ty: REG_MULTI_SZ,
+            bytes: vec![b'A', 0, 0, 0, 0],
+        };
+        assert_eq!(malformed_surrogate.preview(), "00 d8 00 00 [4 bytes]");
+        assert_eq!(odd.preview(), "41 00 00 00 00 [5 bytes]");
+        assert!(utf16_from_bytes(&[0x00, 0xd8]).is_empty());
+        assert!(utf16_from_bytes(&[b'A', 0, 0]).is_empty());
+    }
+
+    #[test]
+    fn well_formed_string_like_hex_preview_stays_human_readable() {
+        let expand = RegData::Hex {
+            ty: REG_EXPAND_SZ,
+            bytes: "%TEMP%\0"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        };
+        let multi = RegData::Hex {
+            ty: REG_MULTI_SZ,
+            bytes: "alpha\0beta\0\0"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        };
+        assert_eq!(expand.preview(), "%TEMP%");
+        assert_eq!(multi.preview(), "alpha | beta");
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winregistry.org/schemas/copy-plan-result-v2.json",
+  "title": "regx subtree/value copy/move plan application result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "schemaVersion", "plan", "operation", "scope", "source",
+    "sourceValue", "sourceComputer", "destination", "destinationValue",
+    "overwrite", "dryRun"
+  ],
+  "properties": {
+    "schema": { "const": "https://winregistry.org/schemas/copy-plan-result-v2.json" },
+    "schemaVersion": { "const": 2 },
+    "plan": { "type": "string" },
+    "operation": { "enum": ["copy", "move"] },
+    "scope": { "enum": ["subtree", "value"] },
+    "source": { "type": "string" },
+    "sourceValue": { "type": ["string", "null"] },
+    "sourceComputer": { "type": ["string", "null"], "minLength": 1 },
+    "destination": { "type": "string" },
+    "destinationValue": { "type": ["string", "null"] },
+    "overwrite": { "type": "boolean" },
+    "dryRun": { "type": "boolean" },
+    "backup": { "type": ["string", "null"] },
+    "backupBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "backupSha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "copy": { "$ref": "#/$defs/apply" },
+    "removeSource": {
+      "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+    },
+    "rolledBack": { "type": "boolean" },
+    "rollback": {
+      "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+    },
+    "views": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/viewResult" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "subtree" } } },
+      "then": {
+        "properties": {
+          "sourceValue": { "type": "null" },
+          "destinationValue": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "value" } } },
+      "then": {
+        "properties": {
+          "sourceValue": { "type": "string" },
+          "destinationValue": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "oneOf": [
+    { "required": ["backup", "backupBytes", "backupSha256", "copy", "removeSource", "rolledBack", "rollback"] },
+    { "required": ["views"] }
+  ],
+  "$defs": {
+    "viewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "view", "plan", "backup", "backupBytes", "backupSha256", "copy", "removeSource", "rolledBack", "rollback"
+      ],
+      "properties": {
+        "view": { "enum": ["32", "64"] },
+        "plan": { "type": "string" },
+        "backup": { "type": ["string", "null"] },
+        "backupBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "backupSha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "copy": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "removeSource": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        },
+        "rolledBack": { "type": "boolean" },
+        "rollback": {
+          "oneOf": [{ "$ref": "#/$defs/apply" }, { "type": "null" }]
+        }
+      }
+    },
+    "apply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keysCreated", "keysDeleted", "valuesSet", "valuesDeleted", "failures"
+      ],
+      "properties": {
+        "keysCreated": { "type": "integer", "minimum": 0 },
+        "keysDeleted": { "type": "integer", "minimum": 0 },
+        "valuesSet": { "type": "integer", "minimum": 0 },
+        "valuesDeleted": { "type": "integer", "minimum": 0 },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target", "problem"],
+            "properties": {
+              "target": { "type": "string" },
+              "problem": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

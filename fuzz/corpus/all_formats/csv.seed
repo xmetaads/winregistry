@@ -1,0 +1,2 @@
+3key,name,type,data
+HKEY_CURRENT_USER\Software\regx-fuzz,Enabled,REG_DWORD,1

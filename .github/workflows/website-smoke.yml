@@ -1,0 +1,22 @@
+name: Deployed website smoke
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployed-website-smoke
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Compare winregistry.org with reviewed source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify deployed pages, assets, redirects, and headers
+        run: python3 scripts/check_deployed_site.py

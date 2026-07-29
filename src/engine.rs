@@ -6,149 +6,8 @@
 //! engine a thin shell rather than a parallel implementation.
 
 use crate::model::*;
+pub use crate::value::{data_to_raw, parse_typed, raw_to_data};
 use crate::winreg::{self, RegKey, View, KEY_READ, KEY_WRITE};
-
-// ---------------------------------------------------------------------------
-// Data conversion
-// ---------------------------------------------------------------------------
-
-/// Model value -> `(type, bytes)` ready for `RegSetValueEx`.
-/// Returns `None` for `RegData::Delete`, which is not a write.
-pub fn data_to_raw(d: &RegData) -> Option<(u32, Vec<u8>)> {
-    match d {
-        RegData::Delete => None,
-        RegData::Sz(s) => Some((REG_SZ, utf16_nul(s))),
-        RegData::Dword(v) => Some((REG_DWORD, v.to_le_bytes().to_vec())),
-        RegData::Hex { ty, bytes } => Some((*ty, bytes.clone())),
-    }
-}
-
-/// `(type, bytes)` from the API -> model value.
-///
-/// A REG_SZ is only rendered as a quoted string when it is genuinely clean
-/// UTF-16: even length, single trailing NUL, no embedded NUL, no control
-/// characters. Anything else stays `hex(1)`, because writing a raw newline into
-/// a `.reg` file silently corrupts the next line - the same rule regedit uses.
-pub fn raw_to_data(ty: u32, bytes: &[u8]) -> RegData {
-    match ty {
-        REG_SZ => match clean_string(bytes) {
-            Some(s) => RegData::Sz(s),
-            None => RegData::Hex {
-                ty,
-                bytes: bytes.to_vec(),
-            },
-        },
-        REG_DWORD if bytes.len() == 4 => {
-            let mut a = [0u8; 4];
-            a.copy_from_slice(bytes);
-            RegData::Dword(u32::from_le_bytes(a))
-        }
-        _ => RegData::Hex {
-            ty,
-            bytes: bytes.to_vec(),
-        },
-    }
-}
-
-pub fn utf16_nul(s: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 2 + 2);
-    for u in s.encode_utf16() {
-        out.extend_from_slice(&u.to_le_bytes());
-    }
-    out.extend_from_slice(&[0, 0]);
-    out
-}
-
-fn clean_string(bytes: &[u8]) -> Option<String> {
-    if bytes.is_empty() {
-        return Some(String::new());
-    }
-    if bytes.len() % 2 != 0 || !bytes.ends_with(&[0, 0]) {
-        return None;
-    }
-    let units: Vec<u16> = bytes[..bytes.len() - 2]
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-    if units.contains(&0) {
-        return None;
-    }
-    let s = String::from_utf16(&units).ok()?;
-    if s.chars().any(|c| (c as u32) < 0x20) {
-        return None;
-    }
-    Some(s)
-}
-
-/// Parse a `-t TYPE -d DATA` pair from the command line into a model value.
-///
-/// Follows `reg.exe` conventions so muscle memory transfers: `REG_MULTI_SZ`
-/// entries are separated by a literal `\0`, and DWORD/QWORD accept decimal or
-/// `0x`-prefixed hex.
-pub fn parse_typed(ty: &str, data: &str) -> std::result::Result<RegData, String> {
-    let t = ty.trim().to_ascii_uppercase();
-    let t = t.strip_prefix("REG_").unwrap_or(&t);
-    match t {
-        "SZ" => Ok(RegData::Sz(data.to_string())),
-        "EXPAND_SZ" => Ok(RegData::Hex {
-            ty: REG_EXPAND_SZ,
-            bytes: utf16_nul(data),
-        }),
-        "MULTI_SZ" => {
-            let mut bytes = Vec::new();
-            for part in data.split("\\0").filter(|s| !s.is_empty()) {
-                bytes.extend_from_slice(&utf16_nul(part));
-            }
-            bytes.extend_from_slice(&[0, 0]); // the terminating empty string
-            Ok(RegData::Hex {
-                ty: REG_MULTI_SZ,
-                bytes,
-            })
-        }
-        "DWORD" => parse_int(data)
-            .and_then(|v| u32::try_from(v).ok())
-            .map(RegData::Dword)
-            .ok_or_else(|| format!("invalid DWORD value {data:?}")),
-        "QWORD" => parse_int(data)
-            .map(|v| RegData::Hex {
-                ty: REG_QWORD,
-                bytes: v.to_le_bytes().to_vec(),
-            })
-            .ok_or_else(|| format!("invalid QWORD value {data:?}")),
-        "BINARY" | "NONE" => {
-            let cleaned: String = data
-                .chars()
-                .filter(|c| !matches!(c, ' ' | ',' | '-' | ':'))
-                .collect();
-            if cleaned.len() % 2 != 0 {
-                return Err("binary data must have an even number of hex digits".into());
-            }
-            let mut bytes = Vec::with_capacity(cleaned.len() / 2);
-            for pair in cleaned.as_bytes().chunks(2) {
-                let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
-                bytes.push(
-                    u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte {s:?}"))?,
-                );
-            }
-            Ok(RegData::Hex {
-                ty: if t == "BINARY" { REG_BINARY } else { REG_NONE },
-                bytes,
-            })
-        }
-        _ => Err(format!(
-            "unknown type {ty:?}; expected one of REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, \
-             REG_DWORD, REG_QWORD, REG_BINARY, REG_NONE"
-        )),
-    }
-}
-
-fn parse_int(s: &str) -> Option<u64> {
-    let s = s.trim();
-    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        Some(hex) => u64::from_str_radix(hex, 16).ok(),
-        None => s.parse::<u64>().ok(),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Root resolution
@@ -182,6 +41,29 @@ impl Roots {
         }))
     }
 
+    /// A single remote predefined hive mounted as the resolver root.
+    ///
+    /// Windows officially supports HKLM and HKU through
+    /// RegConnectRegistryW. The caller validates that restriction before
+    /// reaching this function.
+    pub fn remote(computer: &str, hive: Hive) -> winreg::Result<Roots> {
+        let (handle, label) = match hive {
+            Hive::Hklm => (winreg::hkey_local_machine(), "HKEY_LOCAL_MACHINE"),
+            Hive::Hku => (winreg::hkey_users(), "HKEY_USERS"),
+            _ => {
+                return Err(winreg::Error {
+                    code: winreg::ERROR_INVALID_HANDLE,
+                    op: "RegConnectRegistry",
+                    target: format!(
+                        "{computer}\\{} (remote reads support only HKLM and HKU)",
+                        hive.long_name()
+                    ),
+                })
+            }
+        };
+        Ok(Roots::Mounted(RegKey::connect(computer, handle, label)?))
+    }
+
     /// Returns the root handle plus the subkey path relative to it.
     pub fn resolve<'a>(&'a self, p: &RegPath) -> (&'a RegKey, String) {
         match self {
@@ -211,6 +93,99 @@ pub struct ExportReport {
     pub skipped: Vec<(String, String)>,
     pub keys: usize,
     pub values: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct ListReport {
+    /// Descendants whose handles could not be opened for recursive traversal.
+    pub skipped: Vec<(String, String)>,
+    pub truncated: bool,
+}
+
+/// List immediate child keys, or every descendant when `recursive` is set.
+/// The requested key itself is not included.
+pub fn list<F>(
+    roots: &Roots,
+    path: &RegPath,
+    view: View,
+    recursive: bool,
+    limit: usize,
+    mut allows: F,
+) -> winreg::Result<(Vec<RegPath>, ListReport)>
+where
+    F: FnMut(&RegPath) -> bool,
+{
+    let (root, sub) = roots.resolve(path);
+    let key = root.open(&sub, KEY_READ, view)?;
+    let mut out = Vec::new();
+    let mut report = ListReport::default();
+    let mut walk = ListWalk {
+        view,
+        recursive,
+        limit,
+        allows: &mut allows,
+        out: &mut out,
+        report: &mut report,
+    };
+    walk.children(&key, path);
+    Ok((out, report))
+}
+
+struct ListWalk<'a, F> {
+    view: View,
+    recursive: bool,
+    limit: usize,
+    allows: &'a mut F,
+    out: &'a mut Vec<RegPath>,
+    report: &'a mut ListReport,
+}
+
+impl<F> ListWalk<'_, F>
+where
+    F: FnMut(&RegPath) -> bool,
+{
+    fn children(&mut self, key: &RegKey, path: &RegPath) -> bool {
+        let children = match key.subkeys() {
+            Ok(children) => children,
+            Err(error) => {
+                self.report
+                    .skipped
+                    .push((path.to_string(), error.to_string()));
+                return false;
+            }
+        };
+        for child in children {
+            let child_path = RegPath {
+                hive: path.hive,
+                sub: if path.sub.is_empty() {
+                    child.clone()
+                } else {
+                    format!("{}\\{}", path.sub, child)
+                },
+            };
+            if (self.allows)(&child_path) {
+                if self.out.len() == self.limit {
+                    self.report.truncated = true;
+                    return true;
+                }
+                self.out.push(child_path.clone());
+            }
+            if self.recursive {
+                match key.open(&child, KEY_READ, self.view) {
+                    Ok(child_key) => {
+                        if self.children(&child_key, &child_path) {
+                            return true;
+                        }
+                    }
+                    Err(error) => self
+                        .report
+                        .skipped
+                        .push((child_path.to_string(), error.to_string())),
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Export `path` (and optionally its subtree) into key blocks.
@@ -310,6 +285,136 @@ impl ApplyReport {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlanOp {
+    KeyCreate,
+    KeyDelete,
+    ValueSet,
+    ValueDelete,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanChange {
+    pub op: PlanOp,
+    pub path: RegPath,
+    pub name: Option<ValueName>,
+    pub before: Option<RegData>,
+    pub after: Option<RegData>,
+}
+
+#[derive(Debug, Default)]
+pub struct PlanReport {
+    pub changes: Vec<PlanChange>,
+    pub failures: Vec<(String, String)>,
+}
+
+impl PlanReport {
+    pub fn counts(&self) -> (usize, usize, usize, usize) {
+        let mut counts = (0, 0, 0, 0);
+        for change in &self.changes {
+            match change.op {
+                PlanOp::KeyCreate => counts.0 += 1,
+                PlanOp::KeyDelete => counts.1 += 1,
+                PlanOp::ValueSet => counts.2 += 1,
+                PlanOp::ValueDelete => counts.3 += 1,
+            }
+        }
+        counts
+    }
+}
+
+/// Resolve the exact operations an apply would attempt without writing.
+///
+/// This is also the implementation behind `--dry-run`, so the standalone
+/// `plan` command cannot drift from mutation rehearsal.
+pub fn plan(roots: &Roots, file: &RegFile, view: View) -> PlanReport {
+    let mut report = PlanReport::default();
+    for block in &file.keys {
+        let (root, sub) = roots.resolve(&block.path);
+        if block.delete {
+            match root.open(&sub, KEY_READ, view) {
+                Ok(_) => report.changes.push(PlanChange {
+                    op: PlanOp::KeyDelete,
+                    path: block.path.clone(),
+                    name: None,
+                    before: None,
+                    after: None,
+                }),
+                Err(error) if error.is_not_found() => {}
+                Err(error) => report
+                    .failures
+                    .push((block.path.to_string(), error.to_string())),
+            }
+            continue;
+        }
+
+        let key = match root.open(&sub, KEY_READ | KEY_WRITE, view) {
+            Ok(key) => Some(key),
+            Err(error) if error.is_not_found() => {
+                let capability = probe(roots, &block.path, view);
+                if !capability.creatable {
+                    report.failures.push((
+                        block.path.to_string(),
+                        format!(
+                            "key does not exist and cannot be created without writing: {}",
+                            capability.detail
+                        ),
+                    ));
+                    continue;
+                }
+                report.changes.push(PlanChange {
+                    op: PlanOp::KeyCreate,
+                    path: block.path.clone(),
+                    name: None,
+                    before: None,
+                    after: None,
+                });
+                None
+            }
+            Err(error) => {
+                report
+                    .failures
+                    .push((block.path.to_string(), error.to_string()));
+                continue;
+            }
+        };
+
+        for value in &block.values {
+            let name = value_api_name(&value.name);
+            let before = match &key {
+                Some(key) => match key.get_value(name) {
+                    Ok(value) => value.map(|(ty, bytes)| raw_to_data(ty, &bytes)),
+                    Err(error) => {
+                        report
+                            .failures
+                            .push((format!("{}\\{}", block.path, value.name), error.to_string()));
+                        continue;
+                    }
+                },
+                None => None,
+            };
+            match &value.data {
+                RegData::Delete if before.is_some() => report.changes.push(PlanChange {
+                    op: PlanOp::ValueDelete,
+                    path: block.path.clone(),
+                    name: Some(value.name.clone()),
+                    before,
+                    after: None,
+                }),
+                RegData::Delete => {}
+                after => report.changes.push(PlanChange {
+                    op: PlanOp::ValueSet,
+                    path: block.path.clone(),
+                    name: Some(value.name.clone()),
+                    before,
+                    after: Some(after.clone()),
+                }),
+            }
+        }
+    }
+    report
+}
+
 /// Apply every key block. `dry_run` performs all the *reads* (so permission
 /// problems still surface) but skips every write.
 /// Apply without an audit log.
@@ -337,19 +442,49 @@ pub fn apply_audited(
     mut audit: Option<&mut crate::audit::Logger>,
 ) -> ApplyReport {
     use crate::audit::{Event, Op, Outcome};
-    let outcome = if dry_run {
-        Outcome::Simulated
-    } else {
-        Outcome::Applied
-    };
+    if dry_run {
+        let plan = plan(roots, file, view);
+        if let Some(audit) = audit.as_deref_mut() {
+            for change in &plan.changes {
+                audit.record(Event {
+                    op: match change.op {
+                        PlanOp::KeyCreate => Op::KeyCreate,
+                        PlanOp::KeyDelete => Op::KeyDelete,
+                        PlanOp::ValueSet => Op::ValueSet,
+                        PlanOp::ValueDelete => Op::ValueDelete,
+                    },
+                    path: &change.path,
+                    name: change.name.as_ref(),
+                    before: change.before.as_ref(),
+                    after: change.after.as_ref(),
+                    outcome: Outcome::Simulated,
+                    detail: None,
+                });
+            }
+        }
+        let (keys_created, keys_deleted, values_set, values_deleted) = plan.counts();
+        return ApplyReport {
+            keys_created,
+            keys_deleted,
+            values_set,
+            values_deleted,
+            failures: plan.failures,
+        };
+    }
+    let outcome = Outcome::Applied;
     let mut r = ApplyReport::default();
 
     for block in &file.keys {
         let (root, sub) = roots.resolve(&block.path);
 
         if block.delete {
-            if root.open(&sub, KEY_READ, view).is_err() {
-                continue; // nothing to delete
+            match root.open(&sub, KEY_READ, view) {
+                Ok(_) => {}
+                Err(error) if error.is_not_found() => continue,
+                Err(error) => {
+                    r.failures.push((block.path.to_string(), error.to_string()));
+                    continue;
+                }
             }
             if dry_run {
                 r.keys_deleted += 1;
@@ -667,13 +802,64 @@ mod tests {
     #[test]
     fn clean_string_rejects_unterminated_and_control_chars() {
         assert_eq!(
-            clean_string(&[0x41, 0x00, 0x00, 0x00]).as_deref(),
+            crate::value::clean_string(&[0x41, 0x00, 0x00, 0x00]).as_deref(),
             Some("A")
         );
-        assert_eq!(clean_string(&[0x41, 0x00]), None, "missing NUL terminator");
-        assert_eq!(clean_string(&[0x41, 0x00, 0x00]), None, "odd length");
-        assert_eq!(clean_string(&[0x0a, 0x00, 0x00, 0x00]), None, "newline");
-        assert_eq!(clean_string(&[]).as_deref(), Some(""));
+        assert_eq!(
+            crate::value::clean_string(&[0x41, 0x00]),
+            None,
+            "missing NUL terminator"
+        );
+        assert_eq!(
+            crate::value::clean_string(&[0x41, 0x00, 0x00]),
+            None,
+            "odd length"
+        );
+        assert_eq!(
+            crate::value::clean_string(&[0x0a, 0x00, 0x00, 0x00]),
+            None,
+            "newline"
+        );
+        assert_eq!(crate::value::clean_string(&[]).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn plan_and_dry_run_share_the_same_mutations() {
+        let path =
+            std::env::temp_dir().join(format!("regx-plan-engine-{}.hiv", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let session = crate::hive::open(&path, true, true, true).expect("create test hive");
+        let file = RegFile {
+            format: RegFormat::V5,
+            encoding: crate::encoding::SourceEncoding::Utf8,
+            keys: vec![KeyBlock {
+                path: RegPath::parse("HKCU\\Software\\PlanTest").unwrap(),
+                delete: false,
+                values: vec![ValueEntry {
+                    name: ValueName::Named("Enabled".into()),
+                    data: RegData::Dword(1),
+                    line: 0,
+                }],
+                line: 0,
+            }],
+        };
+
+        let planned = plan(&session.roots, &file, View::Native);
+        assert_eq!(planned.counts(), (1, 0, 1, 0));
+        let rehearsed = apply(&session.roots, &file, View::Native, true);
+        assert_eq!(
+            (
+                rehearsed.keys_created,
+                rehearsed.keys_deleted,
+                rehearsed.values_set,
+                rehearsed.values_deleted,
+            ),
+            planned.counts()
+        );
+        assert!(rehearsed.failures.is_empty());
+
+        drop(session);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -719,6 +905,11 @@ mod tests {
     #[test]
     fn export_then_apply_round_trips_through_the_live_registry() {
         let roots = Roots::live();
+        let software = RegPath::parse("HKEY_CURRENT_USER\\Software").unwrap();
+        if !probe(&roots, &software, View::Native).writable {
+            eprintln!("SKIPPED: HKCU\\Software is not writable on this host");
+            return;
+        }
         let base = "Software\\regx-engine-test";
         let path = RegPath::parse(&format!("HKEY_CURRENT_USER\\{base}")).unwrap();
 

@@ -46,10 +46,25 @@ fn provenance() {
     );
 
     // Rebuild when HEAD moves so the recorded commit does not go stale.
-    for p in [".git/HEAD", ".git/refs/heads/main"] {
-        if PathBuf::from(p).exists() {
-            println!("cargo:rerun-if-changed={p}");
+    // `.git/refs/heads/main` was insufficient: a build on any other branch
+    // could keep an old embedded SHA after a commit, and linked worktrees use a
+    // `.git` pointer file rather than a directory. Ask Git for its real paths.
+    let mut watched = Vec::new();
+    if let Some(head) = git(&["rev-parse", "--git-path", "HEAD"]) {
+        watched.push(head);
+    }
+    if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        if let Some(path) = git(&["rev-parse", "--git-path", &reference]) {
+            watched.push(path);
         }
+    }
+    if let Some(packed) = git(&["rev-parse", "--git-path", "packed-refs"]) {
+        watched.push(packed);
+    }
+    watched.sort();
+    watched.dedup();
+    for path in watched {
+        println!("cargo:rerun-if-changed={}", PathBuf::from(path).display());
     }
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 }
@@ -74,4 +89,16 @@ fn main() {
         manifest.display()
     );
     println!("cargo:rustc-link-arg-bins=/MANIFESTUAC:NO");
+
+    // LINK otherwise assigns a fresh GUID to the embedded RSDS/PDB record on
+    // every clean build. `/Brepro` derives it from build content, making two
+    // independent builds of the same source byte-for-byte identical.
+    println!("cargo:rustc-link-arg-bins=/Brepro");
+
+    // MSVC's default PE stack reserve is 1 MiB. Clap constructs the complete
+    // command graph on the main thread; with the format/search option surface
+    // that crossed the reserve before `main` could dispatch even a trivial
+    // command. Reserving 8 MiB costs virtual address space, not 8 MiB of
+    // committed memory, and matches Rust's ordinary spawned-thread stack.
+    println!("cargo:rustc-link-arg-bins=/STACK:8388608");
 }

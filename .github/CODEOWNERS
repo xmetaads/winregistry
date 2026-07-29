@@ -1,0 +1,4 @@
+# The repository currently has one maintainer. Keep this explicit so security,
+# release, workflow and registry-mutation changes always request a known owner.
+* @xmetaads
+

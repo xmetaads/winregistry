@@ -10,6 +10,14 @@
 <meta property="og:url" content="https://www.winregistry.org/docs">
 <meta property="og:title" content="regx documentation">
 <meta property="og:description" content="Complete command reference for the standard-user Windows Registry CLI.">
+<meta property="og:image" content="https://www.winregistry.org/assets/img/og-winregistry.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1731">
+<meta property="og:image:height" content="909">
+<meta property="og:image:alt" content="WinRegistry — Safe registry automation for Windows">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://www.winregistry.org/assets/img/og-winregistry.png">
+<meta name="twitter:image:alt" content="WinRegistry — Safe registry automation for Windows">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
@@ -64,6 +72,7 @@
     <ul>
       <li><a href="#install">Install</a></li>
       <li><a href="#quickstart">Quick start</a></li>
+      <li><a href="#completions">Shell completion</a></li>
       <li><a href="#globals">Global flags</a></li>
       <li><a href="#exit-codes">Exit codes</a></li>
     </ul>
@@ -74,12 +83,19 @@
       <li><a href="#merge">merge</a></li>
       <li><a href="#import">import &amp; sync</a></li>
       <li><a href="#export">export</a></li>
-      <li><a href="#query">query, set, delete</a></li>
+      <li><a href="#query">query, ls, stats, fingerprint, set, delete</a></li>
+      <li><a href="#copy-move">copy &amp; move</a></li>
+      <li><a href="#backup-restore">backup &amp; restore</a></li>
       <li><a href="#probe">probe</a></li>
+      <li><a href="#permissions">permissions</a></li>
       <li><a href="#hive">hive</a></li>
       <li><a href="#inspect">inspect</a></li>
       <li><a href="#discover">discover</a></li>
       <li><a href="#diff">diff</a></li>
+      <li><a href="#search">search</a></li>
+      <li><a href="#watch">watch</a></li>
+      <li><a href="#plan">plan</a></li>
+      <li><a href="#batch">batch</a></li>
       <li><a href="#audit">audit</a></li>
     </ul>
     <h2>Reference</h2>
@@ -105,8 +121,15 @@
     <section id="install">
       <h2>Install</h2>
       <p>
-        There is nothing to install. Download <code>regx.exe</code>, put it anywhere you can write, and run it.
-        It creates no registry entries, no service, no scheduled task and no <code>%APPDATA%</code> folder.
+        Once a release is available, there is nothing to install: put <code>regx.exe</code>
+        anywhere you can write and run it. It creates no registry entries, no service,
+        no scheduled task and no <code>%APPDATA%</code> folder.
+      </p>
+
+      <p>
+        The first binary release has not been published yet. Build from source below; do not download
+        executables claiming to be an official release until they appear on the
+        <a href="https://github.com/xmetaads/winregistry/releases">GitHub releases page</a>.
       </p>
 
       <div class="terminal">
@@ -133,6 +156,44 @@ regx self-check
       <p>
         Requires a Rust MSVC toolchain. The build embeds the <code>asInvoker</code> manifest into the PE and
         statically links the CRT, so the result needs no Visual C++ redistributable.
+      </p>
+      <p>
+        Release maintainers run both <code>check_release_identity.py --self-test</code> and
+        <code>check_release_assets.py --self-test</code>. Before publication, the first requires one
+        exact tag/Cargo/date/changelog-notes identity and emits the notes GitHub consumes; the second
+        checks exact asset coverage, checksums, PE architecture, elevation manifest, static CRT,
+        CycloneDX identity/version, and the strict binary-size contract.
+      </p>
+      <h3>Generate Unix manual pages</h3>
+      <p>
+        Maintainers packaging regx for WSL or a Unix documentation system can
+        generate section-1 pages for the root and every nested command from the
+        same Clap metadata. The renderer is not linked into <code>regx.exe</code>.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">shell</span></div>
+<pre><code><span class="tok-prompt">$</span> cargo run <span class="tok-flag">--example</span> generate-man <span class="tok-flag">--</span> target/man</code></pre>
+      </div>
+      <h3>Benchmark large inputs</h3>
+      <p>
+        The development harness creates synthetic <code>.reg</code>,
+        <code>Registry.pol</code>, and private application-hive workloads under
+        <code>target/benchmark-large</code>. It measures the release executable
+        end to end and reports throughput, operations per second, and peak
+        working set without touching the user's registry.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">shell</span></div>
+<pre><code><span class="tok-prompt">$</span> cargo run <span class="tok-flag">--release</span> <span class="tok-flag">--example</span> benchmark-large <span class="tok-flag">--</span> target/release/regx.exe 5000</code></pre>
+      </div>
+      <h3>Fuzz parser inputs</h3>
+      <p>
+        Three development-only libFuzzer targets exercise raw <code>.reg</code>
+        bytes, XML, and every forced input dialect. Checked-in seeds and a
+        deterministic 10,000-case mutation smoke are tested normally; the
+        GitHub workflow is configured for short AddressSanitizer campaigns on
+        parser changes and each week. Setup and crash-triage instructions live in
+        <code>fuzz/README.md</code>.
       </p>
     </section>
 
@@ -164,8 +225,43 @@ regx probe <span class="tok-str">"HKCU\Software\Acme"</span>
 regx import app.reg
 
 <span class="tok-dim"># 5. Changed your mind</span>
-regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
+regx undo app.undo.reg</code></pre>
       </div>
+
+      <h3>Use stdin in a pipeline</h3>
+      <p>
+        Commands that read registry data accept <code>-</code> once for standard input. This avoids temporary
+        files while preserving content-based format detection.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">Get-Content</span> app.reg <span class="tok-flag">-Raw</span> | regx inspect -
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">Get-Content</span> policy.json <span class="tok-flag">-Raw</span> | regx convert - <span class="tok-flag">--from</span> json <span class="tok-flag">--redirect</span> off</code></pre>
+      </div>
+      <p>
+        <code>import -</code> and <code>sync -</code> require <code>-y</code> unless they are dry runs.
+        <code>validate - --fix</code> requires <code>--out</code>, because stdin cannot be rewritten.
+      </p>
+    </section>
+
+    <!-- ================= COMPLETIONS ================= -->
+    <section id="completions">
+      <h2>Shell completion</h2>
+      <p>
+        Generate completion from the executable's own Clap command metadata. The
+        output therefore includes every shipped command and flag without a
+        separately maintained script.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> regx completions powershell | <span class="tok-cmd">Out-String</span> | <span class="tok-cmd">Invoke-Expression</span>
+<span class="tok-dim"># Also supported: bash, elvish, fish, zsh</span></code></pre>
+      </div>
+      <p>
+        The command writes only to standard output. Redirect it to the
+        shell-specific completion directory or add the invocation to your
+        profile when you want it loaded permanently.
+      </p>
     </section>
 
     <!-- ================= GLOBALS ================= -->
@@ -179,7 +275,7 @@ regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
             <tr><td><code>--dry-run</code></td><td class="muted">Perform every read — so permission problems still surface — but skip all writes.</td></tr>
             <tr><td><code>-y</code>, <code>--yes</code></td><td class="muted">Skip confirmation prompts.</td></tr>
             <tr><td><code>--output text|json</code></td><td class="muted">Machine-readable output for pipelines.</td></tr>
-            <tr><td><code>--view 64|32|both</code></td><td class="muted">Choose the WOW64 registry view explicitly instead of inheriting process bitness.</td></tr>
+            <tr><td><code>--view 64|32|both</code></td><td class="muted">Choose the WOW64 registry view explicitly. Read-only live commands report both views separately. Mutations, batch operations, backup/restore, copy/move, saved plans, and pruning sync keep independent per-view state, artifacts, undo and cross-view rollback. Commands that do not access a registry view simply have no view-specific effect.</td></tr>
             <tr><td><code>--log-level</code></td><td class="muted"><code>error</code>, <code>warn</code>, <code>info</code> (default) or <code>debug</code>.</td></tr>
             <tr><td><code>--self-check</code></td><td class="muted">Report what AppLocker, SRP, WDAC and the process token do to this binary, then continue or exit.</td></tr>
           </tbody>
@@ -211,7 +307,11 @@ regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
     <!-- ================= VALIDATE ================= -->
     <section id="validate">
       <h2><code>validate</code></h2>
-      <p>Parse and lint one or more <code>.reg</code> files. Touches the registry only if you ask it to.</p>
+      <p>
+        Parse and lint one or more <code>.reg</code> files without touching the
+        registry. Use <code>inspect</code> for structural and fidelity
+        validation of any supported input format.
+      </p>
 
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
@@ -238,7 +338,20 @@ regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>
         </svg>
-        <p><code>--fix</code> refuses to run on a file with <strong>syntax</strong> errors. Repairing those would mean guessing the author's intent rather than fixing a known defect.</p>
+        <p>
+          <code>--fix</code> refuses syntax errors and accepts exactly one input
+          per invocation. This prevents a later invalid file from leaving an
+          earlier file repaired as a partial multi-file operation.
+          With <code>--output json</code>, a requested repair includes
+          <code>repairedData</code>: the complete lossless registry-data object
+          that would be or was written. It is available during
+          <code>--dry-run</code>, preserves numeric type IDs and raw bytes, and
+          is <code>null</code> for read-only validation or syntax-error refusal.
+          A written repair additionally reports its exact output path, byte
+          length and SHA-256. In-place <code>--backup</code> reports the same
+          evidence independently and no longer contaminates JSON stdout with a
+          text-only status line.
+        </p>
       </div>
     </section>
 
@@ -248,39 +361,89 @@ regx import app.undo.reg <span class="tok-flag">--no-backup</span></code></pre>
       <p>Transform a <code>.reg</code> file offline. This command never touches the registry, so it is the safe way to preview a redirection.</p>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
-<pre><code>regx convert &lt;FILE&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--min-confidence</span> LEVEL] [<span class="tok-flag">--reg4</span>]</code></pre>
+<pre><code>regx convert &lt;FILE&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--to</span> reg|json|csv|pol] [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--conflicts</span> last-wins|error] [<span class="tok-flag">--min-confidence</span> LEVEL] [<span class="tok-flag">--reg4</span>]</code></pre>
       </div>
       <p>
-        With no <code>-o</code>, the result is written to standard output. <code>--reg4</code> emits the legacy ANSI
-        <code>REGEDIT4</code> dialect instead of UTF-16 <code>Version 5.00</code>.
+        With no <code>-o</code>, the result is written to standard output.
+        <code>--conflicts error</code> rejects semantic drift inside the source
+        or introduced by Smart Redirection before writing either destination.
+        <code>--reg4</code> emits the legacy ANSI
+        <code>REGEDIT4</code> dialect instead of UTF-16 <code>Version 5.00</code>. File and stdout bytes use the machine's
+        active ANSI codepage and refuses best-fit substitution; use V5 when text is not representable.
+      </p>
+      <p>
+        <code>--to json</code> emits the explicit <code>{"keys": [...]}</code> schema and
+        <code>--to csv</code> emits spreadsheet-ready rows. Both preserve unknown registry types and malformed
+        payloads as a numeric type id plus raw hexadecimal bytes, so converting back to <code>.reg</code> is
+        byte-exact rather than based on display text.
+      </p>
+      <p>
+        <code>--to pol</code> writes a version-1 binary <code>Registry.pol</code> for one implicit
+        HKCU or HKLM policy root. Empty keys, strings, DWORDs, MS-GPREG-defined raw types,
+        named-value deletion and subtree deletion round-trip exactly. Mixed hives,
+        implicit-root/default-value mutation, undefined types and record payloads above 65,535
+        bytes are refused before output because the protocol does not define them.
+      </p>
+      <p>
+        Status and query output selected with <code>--output json</code> has a
+        <a href="/schemas/cli-output-v1.json">versioned command-to-schema catalog</a>.
+        Its command map identifies the correct definition for each machine-readable operation.
+        <code>watch</code> validates one event per line. Data/script producers reject the ambiguous global
+        flag: use <code>convert --to json</code>; <code>merge</code> and <code>completions</code> retain
+        their native <code>.reg</code> and shell-source streams.
       </p>
     </section>
 
     <!-- ================= MERGE ================= -->
     <section id="merge">
       <h2><code>merge</code></h2>
-      <p>Combine several <code>.reg</code> files into one. Duplicate keys are folded case-insensitively with last-write-wins, and every value conflict is reported.</p>
+      <p>
+        Combine any supported registry-data formats into one <code>.reg</code>,
+        JSON, CSV, or binary <code>Registry.pol</code> output.
+        Each input is detected independently; policy-reader options such as
+        <code>--pol-root</code>, <code>--inf-language</code>, and
+        <code>--admx-state</code> are available. Semantic losses fail closed
+        before output. Duplicate keys are folded case-insensitively with
+        last-write-wins, and every value or key-state conflict is reported. For unattended
+        pipelines, <code>--conflicts error</code> refuses the merge before
+        creating output if inputs assign different data to the same value or
+        disagree on whether a key is created or deleted.
+      </p>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
-<pre><code>regx merge &lt;FILE&gt; &lt;FILE...&gt; [<span class="tok-flag">-o</span> FILE]</code></pre>
+<pre><code>regx merge &lt;FILE&gt; &lt;FILE...&gt; [<span class="tok-flag">--to</span> reg|json|csv|pol] [<span class="tok-flag">--conflicts</span> last-wins|error] [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--reg4</span>]</code></pre>
       </div>
     </section>
 
     <!-- ================= IMPORT ================= -->
     <section id="import">
-      <h2><code>import</code> and <code>sync</code></h2>
-      <p>Merge <code>.reg</code> files into the live registry. Both write an undo snapshot before making any change.</p>
+      <h2><code>import</code>, <code>undo</code> and <code>sync</code></h2>
+      <p>Merge registry-data files into the live registry. Both capture a complete undo snapshot before making any change.</p>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
-<pre><code>regx import &lt;FILE...&gt; [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--backup</span> FILE | <span class="tok-flag">--no-backup</span>]
-regx sync   &lt;FILE&gt;    [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--prune</span>]</code></pre>
+<pre><code>regx import &lt;FILE...&gt; [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--conflicts</span> last-wins|error] [<span class="tok-flag">--value</span> GLOB] [<span class="tok-flag">--exclude-value</span> GLOB] [<span class="tok-flag">--backup</span> FILE | <span class="tok-flag">--no-backup</span>]
+regx undo   &lt;FILE&gt;    [<span class="tok-flag">--backup</span> REDO_FILE]
+regx sync   &lt;FILE&gt;    [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--conflicts</span> last-wins|error] [<span class="tok-flag">--prune</span> [<span class="tok-flag">--prune-keys</span>]] [<span class="tok-flag">--backup</span> FILE | <span class="tok-flag">--no-backup</span>]</code></pre>
       </div>
+      <p>
+        Use <code>--conflicts error</code> for fail-closed automation. It rejects
+        conflicting value data and key create/delete state found either inside
+        one input or after combining and redirecting inputs. Rejection occurs
+        before registry reads, undo files, audit records, or confirmation.
+      </p>
+      <p>
+        Repeat <code>--value GLOB</code> and <code>--exclude-value GLOB</code> to import selected value names;
+        matching is case-insensitive and <code>@</code> denotes the default value. Once selection is active,
+        empty-key creates and whole-key deletes are omitted, so value scope cannot silently become key scope.
+      </p>
 
       <h3>The undo snapshot</h3>
       <p>
         The registry offers no transaction, so a failed merge would otherwise leave half-applied state.
         Before writing, <code>regx</code> computes the inverse of the pending change and saves it as an ordinary
-        <code>.reg</code> file — <code>&lt;input&gt;.undo.reg</code> by default.
+        <code>.reg</code> file beside the input. The default filename begins with the input stem and
+        includes PID, nanosecond time, and an atomic sequence, so concurrent operations do not
+        overwrite one another. Use <code>--backup FILE</code> when a script needs a stable explicit path.
       </p>
       <ul>
         <li><code>[-KEY]</code> that exists &rarr; the whole subtree is exported, so undo recreates it</li>
@@ -289,8 +452,21 @@ regx sync   &lt;FILE&gt;    [<span class="tok-flag">--redirect</span> MODE] [<sp
         <li>Key does not exist &rarr; <code>[-TOPMOST_MISSING_ANCESTOR]</code>, <em>not</em> <code>[-KEY]</code> — deleting only the leaf would leave the intermediate keys behind as empty shells</li>
       </ul>
       <p>
-        Restores are ordered before removals. If any key could not be read, the undo file is reported as
-        <strong>INCOMPLETE</strong> rather than silently trusted.
+        Restores are ordered before removals. If any key cannot be read, the operation is refused rather than
+        trusting an incomplete inverse. If a later mutation fails after earlier writes succeeded, regx
+        automatically applies the snapshot and reports both phases. <code>--no-backup</code> explicitly
+        disables the undo file and automatic rollback.
+        JSON results identify each per-view undo artifact and include its exact
+        <code>undoBytes</code> and <code>undoSha256</code>. Dry-run and
+        <code>--no-backup</code> use <code>null</code> evidence.
+      </p>
+      <p>
+        Apply a saved inverse with <code>regx undo FILE</code>. Redirection is always disabled so the
+        recorded paths are restored exactly, and regx captures a fresh redo snapshot before changing
+        anything. For a dual-view bundle, pass its base or either generated member together with
+        <code>--view both</code>; both <code>.32.reg</code> and <code>.64.reg</code> members must exist
+        and are restored as one cross-view atomic operation. JSON seals each persisted redo with exact
+        <code>redoBytes</code> and <code>redoSha256</code>; dry-run uses null evidence.
       </p>
 
       <h3><code>sync --prune</code></h3>
@@ -298,35 +474,205 @@ regx sync   &lt;FILE&gt;    [<span class="tok-flag">--redirect</span> MODE] [<sp
         Makes the apply idempotent: any live value under a declared key that the file does not mention becomes
         an explicit delete. Use it when the <code>.reg</code> file is meant to be the complete desired state.
       </p>
+      <p>
+        Add <code>--prune-keys</code> to treat declared paths as the complete desired tree and recursively
+        remove topmost branches that are not represented. This stronger mode requires <code>--prune</code>,
+        reads every affected subtree before writing, refuses ACL gaps, and includes every generated delete in
+        policy checks, the undo snapshot, audit events, and automatic rollback. Use the same flags with
+        <code>plan</code> to preview the exact deletions.
+      </p>
     </section>
 
     <!-- ================= EXPORT ================= -->
     <section id="export">
       <h2><code>export</code></h2>
-      <p>Write a key to a <code>.reg</code> file, byte-compatible with regedit's own output so diffs are meaningful.</p>
+      <p>Write a live key directly to <code>.reg</code>, JSON, CSV, or <code>Registry.pol</code>. REG output remains byte-compatible with regedit's own output so diffs are meaningful.</p>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
-<pre><code>regx export &lt;KEY&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">-r</span>] [<span class="tok-flag">--reg4</span>]</code></pre>
+<pre><code>regx export &lt;KEY&gt; [<span class="tok-flag">-o</span> FILE] [<span class="tok-flag">--to</span> reg|json|csv|pol] [<span class="tok-flag">--root-as</span> KEY] [<span class="tok-flag">--no-recursive</span>] [<span class="tok-flag">--include</span> GLOB] [<span class="tok-flag">--exclude</span> GLOB] [<span class="tok-flag">--value</span> GLOB] [<span class="tok-flag">--exclude-value</span> GLOB] [<span class="tok-flag">--reg4</span>]</code></pre>
       </div>
       <p>
         A denied subkey never aborts the export. Partial export of your own hive is normal — Group-Policy-locked
         policy keys and <code>Protected</code> subtrees are common — so skips are listed and the command exits
         with code <code>5</code>.
       </p>
+      <p>
+        Key-path filters use repeatable <code>--include</code>/<code>--exclude</code> globs,
+        while value-name filters use the same <code>--value</code>/<code>--exclude-value</code> rules as import.
+        Patterns match portable paths after <code>--root-as</code>; <code>*</code> stays within one path
+        component and <code>**</code> crosses separators.
+        Export is recursive by default; <code>--no-recursive</code> keeps only the requested key.
+        No match exits <code>8</code> and does not create the requested output file. Status JSON records
+        the effective scope, format and filters, reports counts after filtering,
+        and seals every created artifact with its exact <code>bytes</code> and
+        lowercase <code>sha256</code>. Dry-run and inline-data views report
+        null evidence because no file exists.
+        <code>--root-as KEY</code> replaces the requested source key with a validated destination
+        and preserves relative descendants in every output format, enabling explicit HKLM/HKU-to-HKCU
+        migration artifacts without mutating the source.
+      </p>
+      <p>
+        <code>--view both -o NAME.EXT</code> keeps WOW64 views distinct as
+        <code>NAME.32.EXT</code> and <code>NAME.64.EXT</code>. Without <code>-o</code>, add
+        <code>--output json</code> to receive both datasets and per-view failures in one document;
+        plain-text stdout is refused because concatenating two registry files would not be safely re-importable.
+      </p>
     </section>
 
     <!-- ================= QUERY ================= -->
     <section id="query">
-      <h2><code>query</code>, <code>set</code>, <code>delete</code></h2>
+      <h2><code>query</code>, <code>ls</code>, <code>stats</code>, <code>fingerprint</code>, <code>set</code>, <code>delete</code></h2>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">usage</span></div>
 <pre><code>regx query  &lt;KEY&gt; [<span class="tok-flag">-v</span> NAME] [<span class="tok-flag">-r</span>]
-regx set    &lt;KEY&gt; <span class="tok-flag">-v</span> NAME <span class="tok-flag">-t</span> TYPE <span class="tok-flag">-d</span> DATA [<span class="tok-flag">--redirect</span> MODE]
-regx delete &lt;KEY&gt; [<span class="tok-flag">-v</span> NAME] [<span class="tok-flag">-r</span>]</code></pre>
+regx ls     &lt;KEY&gt; [<span class="tok-flag">-r</span>] [<span class="tok-flag">--include</span> GLOB] [<span class="tok-flag">--exclude</span> GLOB] [<span class="tok-flag">--limit</span> N] [<span class="tok-flag">--computer</span> COMPUTER]
+regx stats  &lt;SOURCE&gt; [<span class="tok-flag">--computer</span> COMPUTER] [<span class="tok-flag">--root-as</span> KEY] [<span class="tok-flag">--view</span> native|32|64|both] [<span class="tok-flag">--include</span> GLOB] [<span class="tok-flag">--exclude</span> GLOB] [<span class="tok-flag">--value</span> GLOB] [<span class="tok-flag">--exclude-value</span> GLOB]
+regx fingerprint &lt;SOURCE&gt; [<span class="tok-flag">--computer</span> COMPUTER] [<span class="tok-flag">--root-as</span> KEY] [<span class="tok-flag">--view</span> native|32|64|both] [<span class="tok-flag">--expect</span> SHA256] [<span class="tok-flag">--include</span> GLOB] [<span class="tok-flag">--value</span> GLOB]
+regx set    &lt;KEY&gt; <span class="tok-flag">-v</span> NAME <span class="tok-flag">-t</span> TYPE <span class="tok-flag">-d</span> DATA [<span class="tok-flag">--redirect</span> MODE] [<span class="tok-flag">--backup</span> FILE]
+regx delete &lt;KEY&gt; [<span class="tok-flag">-v</span> NAME] [<span class="tok-flag">-r</span>] [<span class="tok-flag">--backup</span> FILE]</code></pre>
       </div>
+      <p>
+        <code>ls</code> lists immediate child keys without opening or printing their values;
+        <code>-r</code> walks all descendants. It supports independent WOW64 views and read-only
+        remote HKLM/HKU access. Repeatable <code>--include</code>/<code>--exclude</code> globs scope
+        canonical paths, while <code>--limit</code> (default 1000) bounds matches per view and reports
+        <code>truncated</code>. Skipped ACL paths and per-view failures are preserved in strict JSON.
+      </p>
+      <p>
+        <code>fingerprint</code> computes canonical SHA-256 v1 over exact paths, names,
+        deletion state, numeric types, and raw bytes without printing value data. Reordering
+        equivalent source records leaves the digest unchanged; any exact registry-state change
+        changes it. Files, stdin, live/remote keys, and independent WOW64 views are supported.
+        <code>--expect SHA256</code> exits 5 on drift for files and one selected view.
+        A dual-view gate requires both <code>--expect-32</code> and <code>--expect-64</code>,
+        preventing a partially checked pair.
+        Repeatable key <code>--include</code>/<code>--exclude</code> and value
+        <code>--value</code>/<code>--exclude-value</code> globs restrict the exact state covered.
+        JSON echoes the scope and selected counts; no match exits 8 with
+        <code>matched:false</code>, never a false successful empty hash.
+        For migrations, <code>--root-as KEY</code> rebases a live/remote subtree before
+        hashing; offline hive fingerprint rebases the mounted hive root and produces the
+        same digest as an equivalently rebased export. File inputs reject ambiguous rebasing.
+      </p>
+      <p>
+        <code>stats</code> summarizes any supported file, stdin, or live/remote key without
+        printing value names or payloads. It reports effective key and value counts, registry
+        types, raw payload bytes, delete operations, maximum depth, conflicts, and completeness;
+        dual-view results remain separate.
+        Repeatable key and value include/exclude globs scope the metrics exactly like
+        fingerprint/export. JSON echoes that scope and <code>matched</code>; no match exits 8.
+        For migration reports, <code>--root-as KEY</code> rebases a live/remote subtree
+        before filtering and keeps maximum depth relative to the mapped requested root.
+        Offline hive stats maps the mounted hive root with the same semantics. JSON records
+        the canonical <code>rootAs</code>; file inputs reject ambiguous rebasing.
+      </p>
       <p>
         <code>delete</code> without <code>-v</code> removes the key and its subkeys, so it requires <code>-r</code>
         as an explicit acknowledgement.
+      </p>
+      <p>
+        Both mutations capture a complete inverse for every selected registry view before asking for
+        confirmation. After acceptance, the inverse is written to a temporary <code>.reg</code> file;
+        <code>--backup FILE</code> chooses a durable path, and <code>--view both</code> produces
+        <code>FILE.32.reg</code> and <code>FILE.64.reg</code>. Cancelling writes neither registry state
+        nor the requested backup. Temporary names include the process, nanosecond time, and an atomic
+        sequence so concurrent commands cannot reuse one undo path. The JSON result includes each
+        view's exact <code>undo</code> path.
+      </p>
+      <p>
+        Add <code>--computer COMPUTER</code> to <code>query</code> for read-only remote HKLM/HKU access.
+        The same option is available on <code>export</code> and live-key <code>search</code>. It uses
+        Windows <code>RegConnectRegistryW</code>; the Remote Registry service, firewall path, and remote
+        ACLs must already permit the connection. Mutation commands intentionally have no remote option.
+      </p>
+      <p>
+        With <code>--output json</code>, every query value retains the human-readable
+        <code>type</code>/<code>data</code> preview and adds an <code>exact</code> object.
+        That object preserves typed strings and DWORDs, or the numeric registry
+        <code>typeId</code> plus raw bytes for every other type. Live, remote, dual-view,
+        and offline-hive queries therefore share one lossless automation contract.
+      </p>
+    </section>
+
+    <!-- ================= COPY / MOVE ================= -->
+    <section id="copy-move">
+      <h2><code>copy</code> &amp; <code>move</code></h2>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx copy &lt;SOURCE&gt; &lt;DEST&gt; [<span class="tok-flag">--overwrite</span>] [<span class="tok-flag">--backup</span> FILE]
+regx move &lt;SOURCE&gt; &lt;DEST&gt; [<span class="tok-flag">--overwrite</span>] [<span class="tok-flag">--backup</span> FILE]
+regx copy-value &lt;SOURCE_KEY&gt; &lt;VALUE&gt; &lt;DEST_KEY&gt; [<span class="tok-flag">--dest-value</span> NAME] [<span class="tok-flag">--save-plan</span> FILE]
+regx move-value &lt;SOURCE_KEY&gt; &lt;VALUE&gt; &lt;DEST_KEY&gt; [<span class="tok-flag">--dest-value</span> NAME] [<span class="tok-flag">--save-plan</span> FILE]
+regx copy &lt;SOURCE&gt; &lt;DEST&gt; <span class="tok-flag">--save-plan</span> preview.json
+regx apply-copy-plan preview.json <span class="tok-flag">-y</span></code></pre>
+      </div>
+      <p>
+        Both commands copy the complete readable subtree and write one undo snapshot before changing
+        anything. A move is two-phase: the source is deleted only after every destination write succeeds.
+        Existing destinations are refused unless <code>--overwrite</code> is supplied; overwrite merges and
+        leaves unrelated destination values intact. An unreadable source subkey or incomplete rollback
+        snapshot aborts the operation instead of risking silent data loss. A failure in either phase
+        automatically applies the combined snapshot. With <code>--view both</code>, both source and
+        destination pairs are preflighted and snapshotted before mutation, separate
+        <code>.32.reg</code>/<code>.64.reg</code> undo files are written, and a later-view failure rolls
+        back every earlier touched view.
+        <code>--save-plan</code> writes a
+        <a href="/schemas/copy-plan-v2.json">digest-bound collision preview</a> instead of mutating.
+        <code>apply-copy-plan</code> refuses source or destination drift and emits a
+        <a href="/schemas/copy-plan-result-v2.json">versioned result</a>.
+        In dual-view mode, the preview is stored as a <code>.32.json</code>/<code>.64.json</code>
+        pair; apply verifies both artifacts and both live snapshots before writing either view.
+        JSON creation results seal every persisted plan independently with
+        <code>planBytes</code> and <code>planSha256</code>, including value plans and both
+        members of a dual-view pair.
+        Direct mutation and <code>apply-copy-plan</code> results seal every persisted undo
+        with <code>backupBytes</code> and <code>backupSha256</code>; dry-run uses null evidence.
+        For remote-to-local migration, add <code>--source-computer COMPUTER</code> to
+        <code>copy</code>. The source computer and subtree are bound into saved previews, while every write
+        remains local. <code>move</code> intentionally exposes no remote-source option.
+      </p>
+      <p>
+        <code>copy-value</code> and <code>move-value</code> operate on one value while preserving
+        every sibling value and subkey. Use <code>@</code> for the unnamed default value and
+        <code>--dest-value</code> to rename it. They use the same two-phase copy/delete,
+        combined undo snapshot, audit, dry-run, JSON, remote-copy, and cross-view rollback
+        guarantees as subtree operations. Their <code>--save-plan</code> artifacts bind the exact
+        value payload and both names; version 1 subtree plans remain readable.
+      </p>
+    </section>
+
+    <!-- ================= BACKUP / RESTORE ================= -->
+    <section id="backup-restore">
+      <h2><code>backup</code> &amp; <code>restore</code></h2>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">usage</span></div>
+<pre><code>regx backup  &lt;KEY&gt; &lt;HIVEFILE&gt; [<span class="tok-flag">--computer</span> HOST]
+regx restore &lt;HIVEFILE&gt; &lt;DEST&gt; [<span class="tok-flag">--overwrite</span>] [<span class="tok-flag">--backup</span> UNDO.reg]</code></pre>
+      </div>
+      <p>
+        <code>backup</code> creates a genuine native <code>regf</code> application hive without elevation.
+        It preserves keys, empty keys, registry types, and raw value bytes. The file can be inspected or edited
+        with the existing <code>hive</code> commands. <code>--view both</code> preflights both WOW64 views
+        before writing <code>NAME.32.hiv</code> and <code>NAME.64.hiv</code>; if either write fails, neither
+        artifact is kept. <code>--computer HOST</code> reads remote HKLM/HKU while writing only the
+        local hive artifact; no remote mutation API is used. Successful JSON
+        output records the exact <code>bytes</code> and lowercase
+        <code>sha256</code> of every created hive. Both are explicitly
+        <code>null</code> during dry-run because no artifact exists yet.
+      </p>
+      <p>
+        <code>restore</code> rebases the saved root under an explicit live destination. It refuses an existing
+        destination unless <code>--overwrite</code> is supplied, and routes the mutation through administrative
+        policy, audit, a complete undo snapshot, and automatic rollback. In dual-view mode it reads the
+        <code>.32.hiv</code>/<code>.64.hiv</code> pair, writes separate undo files, and rolls back every touched
+        view if either restore fails. JSON seals every persisted undo snapshot
+        with <code>undoBytes</code> and <code>undoSha256</code>, independently
+        per view; dry-run uses null evidence because no undo file is written.
+      </p>
+      <p>
+        Application hives do not preserve per-key ACLs, key classes, or last-write timestamps. Windows'
+        full-fidelity <code>RegSaveKeyEx</code> requires <code>SeBackupPrivilege</code>, so claiming those
+        properties would conflict with regx's standard-user contract.
       </p>
     </section>
 
@@ -351,6 +697,34 @@ HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft
       <p>
         <code>probe</code> has no side effects: when the key does not exist it walks up to the nearest existing
         ancestor and tests write access there instead of creating a scratch key.
+        <code>--computer HOST</code> performs the same capability check against remote HKLM/HKU;
+        it only opens handles with specific access masks and never creates or changes remote state.
+      </p>
+    </section>
+
+    <!-- ================= PERMISSIONS ================= -->
+    <section id="permissions">
+      <h2><code>permissions</code></h2>
+      <p>
+        Inspect the key's real security descriptor without changing it. The result includes owner SID,
+        DACL inheritance/protection, portable SDDL, and the current token's effective access for each
+        individual registry right.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> permissions <span class="tok-str">"HKCU\Software\Acme"</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> permissions <span class="tok-str">"HKLM\Software\Acme"</span> <span class="tok-flag">--view</span> both <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> permissions <span class="tok-str">"HKCU\Software\Acme"</span> <span class="tok-flag">--compare</span> <span class="tok-str">"HKLM\Software\Acme"</span> <span class="tok-flag">--exit-code</span></code></pre>
+      </div>
+      <p>
+        Effective query, enumerate, notify, set-value, create-subkey, and delete rights are measured by
+        opening the key with each specific access mask—not inferred from whether the path begins with HKCU
+        or HKLM. <code>--view both</code> reports the 32-bit and 64-bit views separately.
+        <code>--compare OTHER</code> lists owner, inheritance, SDDL and effective-right differences;
+        <code>--exit-code</code> returns <code>5</code> when drift exists.
+        Use <code>--computer HOST</code> for the first key and
+        <code>--compare-computer HOST</code> for the comparison key, independently, to audit
+        local-to-remote or remote-to-remote ACL drift without enabling remote writes.
       </p>
     </section>
 
@@ -401,7 +775,16 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-fla
   <span class="tok-flag">-c</span> <span class="tok-str">"query Software\MyApp -r"</span>
 
 <span class="tok-dim"># A single operation needs no exec</span>
-regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <span class="tok-flag">-o</span> offline.reg <span class="tok-flag">--root-as</span> <span class="tok-str">"HKEY_USERS\OFFLINE"</span></code></pre>
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <span class="tok-flag">--to</span> json <span class="tok-flag">-o</span> offline.json <span class="tok-flag">--root-as</span> <span class="tok-str">"HKEY_USERS\OFFLINE"</span>
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> probe Software\MyApp
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> permissions Software\MyApp <span class="tok-flag">--output</span> json
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">-y</span> batch changes.json <span class="tok-flag">--strip-root</span> HKCU <span class="tok-flag">--backup</span> hive-undo.reg
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> search Software license <span class="tok-flag">--field</span> name
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> diff Software\MyApp desired.reg <span class="tok-flag">--strip-root</span> HKCU <span class="tok-flag">--exit-code --to</span> json <span class="tok-flag">-o</span> drift.json
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">-y</span> sync desired.reg <span class="tok-flag">--strip-root</span> HKCU <span class="tok-flag">--conflicts</span> error <span class="tok-flag">--prune --prune-keys --backup</span> sync.undo.reg
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">-y</span> copy Software\MyApp Software\MyApp.Backup <span class="tok-flag">--backup</span> copy.undo.reg
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">-y</span> move Software\MyApp.Backup Software\MyApp.Renamed
+regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> <span class="tok-flag">-y</span> undo copy.undo.reg <span class="tok-flag">--backup</span> copy.redo.reg</code></pre>
       </div>
 
       <h3>Operations</h3>
@@ -410,18 +793,49 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
           <thead><tr><th scope="col">Operation</th><th scope="col">Description</th></tr></thead>
           <tbody>
             <tr><td><code>info</code></td><td class="muted">Size, <code>regf</code> signature, and whether the hive can be mounted read-only or read/write. Run this first.</td></tr>
-            <tr><td><code>ls</code></td><td class="muted">List subkeys.</td></tr>
+            <tr><td><code>ls</code></td><td class="muted">List subkeys; add <code>-r</code> for descendants. Repeatable <code>--include</code>/<code>--exclude</code> globs scope relative hive paths, and <code>--limit</code> bounds matching output with explicit truncation status.</td></tr>
+            <tr><td><code>stats</code></td><td class="muted">Summarize keys, values, types, payload bytes, deletes, depth, conflicts, and completeness below a subkey without printing value payloads; key/value globs scope managed state, and <code>--root-as</code> normalizes migration roots before filtering while preserving relative depth.</td></tr>
+            <tr><td><code>fingerprint</code></td><td class="muted">Compute the canonical SHA-256 v1 for exact subtree state without printing value names or payloads; <code>--expect</code> exits 5 on drift, key/value globs scope state, and <code>--root-as</code> normalizes migration roots.</td></tr>
             <tr><td><code>query</code></td><td class="muted">Print values under a subkey.</td></tr>
-            <tr><td><code>set</code></td><td class="muted">Write one value.</td></tr>
-            <tr><td><code>delete</code></td><td class="muted">Delete a subkey or a single value.</td></tr>
-            <tr><td><code>import</code></td><td class="muted">Merge a <code>.reg</code> file in. <code>--strip-root</code> removes the mount-point prefix it was exported under.</td></tr>
-            <tr><td><code>export</code></td><td class="muted">Write part of the hive to a <code>.reg</code> file. <code>--root-as</code> sets the root label, because the <code>.reg</code> format has no syntax for "app hive".</td></tr>
+            <tr><td><code>probe</code></td><td class="muted">Test whether a subkey exists and can be read, changed, or created without modifying the hive.</td></tr>
+            <tr><td><code>permissions</code></td><td class="muted">Report owner SID, inheritance, SDDL, and effective query/enumerate/notify/set/create/delete access for a subkey.</td></tr>
+            <tr><td><code>search</code></td><td class="muted">Search keys, value names, types, or data below a subkey using bounded substring, glob, or Unicode regex matching, with path/value include/exclude filters and result limits.</td></tr>
+            <tr><td><code>diff</code></td><td class="muted">Compare a subtree directly with any supported registry-data file, optionally write the applicable drift patch, scope key paths or value names, summarize, or return exit 5 when different. Value selection omits structural key changes so unselected siblings cannot be deleted.</td></tr>
+            <tr><td><code>set</code></td><td class="muted">Write one value, with a persisted inverse selectable through <code>--backup</code>.</td></tr>
+            <tr><td><code>delete</code></td><td class="muted">Delete a subkey or a single value, with a persisted inverse selectable through <code>--backup</code>.</td></tr>
+            <tr><td><code>copy</code> / <code>move</code></td><td class="muted">Copy, move, or rename a complete subtree. Existing destinations require <code>--overwrite</code>; recursive self-destinations are rejected, partial operations roll back, and <code>--backup</code> persists the inverse.</td></tr>
+            <tr><td><code>copy-value</code> / <code>move-value</code></td><td class="muted">Copy, move, or rename one value without copying sibling values or subkeys. <code>--backup</code> persists the inverse.</td></tr>
+            <tr><td><code>import</code></td><td class="muted">Merge any supported registry-data file in. Content-first detection and the shared POL/INF/ADMX selectors apply; fidelity losses fail before snapshotting. <code>--strip-root</code> removes the mount-point prefix; <code>--conflicts error</code> rejects duplicate semantic drift before snapshot or mutation; <code>--backup</code> selects the undo artifact.</td></tr>
+            <tr><td><code>undo</code></td><td class="muted">Restore a generated inverse with its HKCU mount label removed automatically, while persisting a fresh redo snapshot before any hive change.</td></tr>
+            <tr><td><code>sync</code></td><td class="muted">Reconcile any supported registry-data file into the hive through the shared lossless reader pipeline. <code>--conflicts error</code> fails closed after root stripping; <code>--prune</code> removes undeclared values, <code>--prune-keys</code> removes unrepresented subtrees, and <code>--backup</code> selects the complete inverse.</td></tr>
+            <tr><td><code>batch</code></td><td class="muted">Apply the published v1 JSON manifest atomically under one mount. Every operation is re-rooted and policy-checked before any write, one shared inverse is persisted, and a mid-batch failure rolls back all earlier operations.</td></tr>
+            <tr><td><code>export</code></td><td class="muted">Write part of the hive as REG, JSON, CSV, or Registry.pol. <code>--root-as</code> assigns every exported path a real registry key because an application hive has no permanent namespace; <code>--no-recursive</code>, key-path <code>--include</code>/<code>--exclude</code>, and value-name <code>--value</code>/<code>--exclude-value</code> globs scope the artifact. Filters match the rebased portable paths. Empty selections create no file, and states Registry.pol cannot encode are refused before output.</td></tr>
             <tr><td><code>exec</code></td><td class="muted">Run several operations under one mount, via repeated <code>-c</code> or a <code>--script</code> file.</td></tr>
           </tbody>
         </table>
       </div>
 
       <h3>What you can realistically open</h3>
+      <p>
+        A private application-hive handle has one namespace, not separate WOW64 views. Hive
+        operations therefore reject <code>--view 32</code>, <code>--view 64</code>, and
+        <code>--view both</code> instead of silently ignoring them.
+      </p>
+      <p>
+        Every mutation prompts unless <code>-y</code> is allowed. Administrative
+        <code>RequireConfirm</code> disables that bypass for set, delete, import, sync, subtree and
+        value copy/move alike. Every single-operation mutation takes a complete inverse before the
+        prompt, persists it only after acceptance, and automatically applies it after a partial failure.
+        Use <code>--backup FILE</code> to choose the path, then reapply it with
+        <code>hive HIVEFILE undo FILE -y</code>. Undo automatically removes the snapshot's HKCU
+        mount label and captures another reversible redo snapshot. Ordinary mutations expose
+        <code>undo</code> in JSON; this command exposes the new artifact unambiguously as <code>redo</code>,
+        with exact byte length and SHA-256 evidence for either artifact. Dry-run uses null evidence.
+        Both forms also include the apply and rollback reports. Default temporary undo names use the same collision-resistant
+        allocator; repeated mutations inside one <code>hive exec</code> receive distinct paths.
+        Root deletion is rejected during preflight, including when it is hidden inside an import,
+        sync, or batch manifest.
+      </p>
       <p>
         Write access to the <em>file</em> is still required, and a hive already mounted by the OS is held
         exclusively. Realistic targets: a logged-off secondary profile, a <strong>copy</strong> of a hive, an
@@ -451,6 +865,20 @@ regx hive <span class="tok-str">"C:\path\MyApp.hive"</span> export Software <spa
   1 key(s) have no per-user equivalent; `regx convert` shows which</code></pre>
       </div>
       <p>
+        Text and JSON output include the detected source encoding; registry
+        files also report <code>REGEDIT4</code> versus
+        <code>Windows Registry Editor Version 5.00</code>.
+        Duplicate semantic drift exits <code>5</code>. Text identifies every
+        conflicting path/value and its before/after preview; JSON exposes the
+        strict <code>conflicts[]</code> objects with source line numbers plus
+        <code>oldExact</code>/<code>newExact</code> typed/raw value payloads so
+        automation can repair the input before selecting
+        <code>--conflicts error</code>.
+        Whole-key conflicts use null exact payloads because no individual value exists.
+        Each JSON report additionally embeds <code>data</code>, the complete
+        lossless parsed registry-data model. It remains inspectable for an
+        incomplete or conflicting source even when <code>convert</code>
+        correctly refuses to emit that partial model as a safe artifact.
         <code>regx formats</code> lists every supported format and how each is detected.
       </p>
     </section>
@@ -542,7 +970,18 @@ stem        updater
           know which rungs a given product actually implements. Confirm before trusting a hit.
         </p>
       </div>
-      <p><code>--strict</code> exits <code>5</code> if any hit carries a risk, so a deployment check can gate on it.</p>
+      <p>
+        With <code>--output json</code>, the versioned report includes the
+        resolved executable and anchor, enabled discovery controls, notes,
+        every probed-but-absent candidate in <code>searched</code>, and the
+        aggregate <code>risky</code> count. Every hit keeps both its candidate
+        <code>path</code> and canonical <code>resolvedPath</code>, alongside
+        stable risk names and structured <code>riskDetails</code>
+        explanations. JSON always retains that full probe trail;
+        <code>--verbose</code> only expands text output.
+        <code>--strict</code> exits <code>5</code> if any hit carries a risk, so
+        a deployment check can gate on it.
+      </p>
     </section>
 
     <!-- ================= DIFF ================= -->
@@ -569,13 +1008,192 @@ stem        updater
         The patch written by <code>-o</code> turns <strong>A into B</strong>. So a drift report is
         also the fix, and swapping the arguments produces the rollback.
         <code>--exit-code</code> exits <code>5</code> when the two sides differ, which makes it
-        usable as a deployment gate.
+        usable as a deployment gate. If either input contains parse losses or conflicting duplicate
+        assignments, the visible comparison is still reported as incomplete and exits <code>5</code>,
+        but <code>-o</code> refuses to write a potentially unsafe patch.
+        Select <code>--to reg|json|csv|pol</code> to write that patch directly in any
+        round-trip registry-data format; an unrepresentable Registry.pol patch fails closed.
+        JSON status seals each created patch with exact <code>bytes</code> and
+        lowercase <code>sha256</code>. Dry-run, omitted and incomplete-source
+        patches carry explicit null evidence.
+      </p>
+      <p>
+        <code>--map-a FROM=TO</code> and <code>--map-b FROM=TO</code> rebase a complete
+        input subtree before comparison. Use this for migrations where equivalent settings live
+        under different roots, such as HKLM to HKCU. Every key on that side must be beneath
+        <code>FROM</code>; invalid or partial mappings are rejected. Counts, filters, JSON changes,
+        and the generated A-to-B patch all use the mapped destination path.
+      </p>
+      <p>
+        Repeat <code>--value GLOB</code> and <code>--exclude-value GLOB</code> to scope
+        comparison to value names; use <code>@</code> for the default value. Activating
+        value selection removes structural key changes from the diff. If the target lacks
+        an entire key, the patch therefore emits only selected value deletions and cannot
+        remove unselected sibling values.
+      </p>
+      <p>
+        JSON value changes retain the compatible <code>left</code>/<code>right</code>
+        previews and add <code>leftExact</code>/<code>rightExact</code>. A present side
+        carries its typed value or numeric type ID and raw bytes; an absent side is null.
+        The same lossless change contract is used by single-view, dual-view, remote, and
+        offline-hive diff.
+      </p>
+      <p>
+        Repeat case-insensitive glob <code>--include</code>/<code>--exclude</code> options to scope a large
+        tree. <code>--summary-only</code> emits counts without individual changes. The same filtered diff
+        drives counts, exit status, JSON, and <code>-o</code>, so a summary-only patch remains complete for
+        the selected scope.
+      </p>
+      <p>
+        If either side is live, <code>--view both</code> compares the file/live or live/live pair
+        independently in the 32-bit and 64-bit views. <code>-o PATCH.json --to json</code> writes
+        <code>PATCH.32.json</code> and <code>PATCH.64.json</code>; JSON retains per-view counts,
+        completeness, changes, patch path, write status and failures. The paired output is fail-closed:
+        neither patch is written if either view fails or is incomplete. A stdin side is read once and reused
+        for both views.
+      </p>
+      <p>
+        <code>--computer-a HOST</code> and <code>--computer-b HOST</code> independently read a live
+        HKLM/HKU side through Windows Remote Registry. This supports remote-to-file,
+        remote-to-local, and remote-to-remote drift checks without enabling remote mutation; either
+        option is rejected when its corresponding side is a file, stdin, HKCU, or another unsupported root.
       </p>
       <p>
         Comparison is case-insensitive on key paths and value names, because the registry is, but
         byte-exact on data: a <code>REG_SZ</code> and a <code>REG_EXPAND_SZ</code> holding the same
         characters are a difference, not a match, since one is expanded by the consuming application
         and the other is not.
+      </p>
+    </section>
+
+    <!-- ================= SEARCH ================= -->
+    <section id="search">
+      <h2><code>search</code></h2>
+      <p>
+        Search any supported file, stdin, or a live registry subtree with the same command. Matching supports
+        Unicode-aware substring, glob, or bounded regular-expression queries over key paths, value names,
+        registry types and full data payloads.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> search <span class="tok-str">"HKCU\Software"</span> example.test <span class="tok-flag">--field</span> data <span class="tok-flag">--limit</span> 20
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> search policy.json REG_DWORD <span class="tok-flag">--field</span> type <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> search app.reg <span class="tok-str">"^Server(Name|Backup)$"</span> <span class="tok-flag">--match</span> regex <span class="tok-flag">--include</span> <span class="tok-str">"HKCU\Software\Acme\**"</span> <span class="tok-flag">--exclude</span> <span class="tok-str">"**\Cache"</span> <span class="tok-flag">--value</span> <span class="tok-str">"Server*"</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">Get-Content</span> app.reg <span class="tok-flag">-Raw</span> | regx search - ServerName <span class="tok-flag">--field</span> name</code></pre>
+      </div>
+      <p>
+        Repeat <code>--field key|name|type|data</code> to select fields; omit it to search all four.
+        Use <code>--match glob|regex</code> for patterns, <code>--case-sensitive</code> for exact case,
+        and repeat the always-glob <code>--include</code>/<code>--exclude</code> path filters.
+        A single <code>*</code> stays within one key component; <code>**</code> crosses subkeys.
+        Repeat <code>--value GLOB</code>/<code>--exclude-value GLOB</code> to scope value matches
+        case-insensitively; <code>@</code> denotes the default value. Activating value scope omits
+        key-only matches so a value-bounded search cannot silently widen to key scope. The same
+        contract applies to offline <code>hive search</code>.
+        No matches exits with code <code>8</code>. JSON output reports whether the result was truncated by
+        <code>--limit</code>. If an ACL blocks any live subkey, the result is marked
+        <code>incomplete</code> and exits <code>5</code> rather than claiming a complete search.
+        Parse losses or conflicting duplicate assignments in a file source have the same
+        incomplete/exit-<code>5</code> semantics.
+        Each JSON value match includes an <code>exact</code> registry-value object with
+        typed data or numeric type ID and raw bytes; key-path matches use
+        <code>exact: null</code>. The display preview is retained for compatibility.
+        With a live source, <code>--view both</code> reports independent 32-bit and 64-bit matches,
+        truncation and ACL completeness; <code>--limit</code> applies per view.
+      </p>
+    </section>
+
+    <!-- ================= WATCH ================= -->
+    <section id="watch">
+      <h2><code>watch</code></h2>
+      <p>
+        Wait for native Windows registry notifications without polling, then compare snapshots to identify
+        the keys and values that changed. JSON is emitted one object per line for streaming automation.
+        Every value change includes lossless <code>leftExact</code>/<code>rightExact</code> objects;
+        added or removed sides use <code>null</code>, while present sides preserve typed values or numeric
+        type ID and raw bytes.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> watch <span class="tok-str">"HKCU\Software\Acme"</span> <span class="tok-flag">--count</span> 10 <span class="tok-flag">--timeout</span> 300 <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> watch <span class="tok-str">"HKCU\Environment"</span> <span class="tok-flag">--no-recursive</span></code></pre>
+      </div>
+      <p>
+        A zero timeout waits indefinitely. A bounded timeout with no change returns success and emits
+        <code>timedOut: true</code>. Recursive watch is the default; unreadable descendants make the baseline
+        or result incomplete and exit <code>5</code>. <code>--view both</code> arms native Win32 events for
+        the 32-bit and 64-bit keys and waits on both without polling. Each event identifies
+        <code>triggeredView</code> and includes separate snapshot diffs for both views. Carrying the
+        before/after payload in the notification avoids a race-prone follow-up query.
+      </p>
+    </section>
+
+    <!-- ================= PLAN ================= -->
+    <section id="plan">
+      <h2><code>plan</code></h2>
+      <p>
+        Resolve an import or sync before mutation. Unlike a summary-only dry run, the plan lists every key/value
+        operation with before and after state, Smart Redirection outcomes, administrative-policy decisions and
+        rollback completeness. By default it writes nothing; <code>--save FILE</code> explicitly writes only
+        a digest-bound plan artifact, never registry state, audit records, or undo files.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> plan app.reg <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> plan desired.json <span class="tok-flag">--conflicts</span> error <span class="tok-flag">--prune</span> <span class="tok-flag">--redirect</span> auto <span class="tok-flag">--save</span> rollout.plan.json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> apply-plan rollout.plan.json <span class="tok-flag">-y</span></code></pre>
+      </div>
+      <p>
+        One denied destination blocks the whole plan, matching import's all-or-nothing policy boundary.
+        Redacted audit policy also redacts plan values to SHA-256 digests. Unreadable destinations, incomplete
+        rollback, skipped/refused redirects or policy denial exit with code <code>5</code>.
+        With <code>--view both</code>, text and JSON contain separate 32-bit and 64-bit changes, failures,
+        policy denials and rollback paths.
+        Unredacted JSON before/after states also contain an <code>exact</code>
+        registry-value object with typed data or numeric type ID and raw bytes.
+        When policy requires redaction, only the existing SHA-256 evidence is emitted and
+        no exact payload is exposed.
+      </p>
+      <p>
+        A saved plan uses
+        <a href="/schemas/saved-plan-v1.json">schema v1</a> and binds its payload, every named source file,
+        each per-view desired mutation, and the relevant current registry state with SHA-256.
+        <code>apply-plan</code> rechecks all bindings and current administrative policy before writing, then
+        persists fresh per-view undo snapshots and applies with audited cross-view rollback. Any source or
+        current-state drift exits <code>5</code> without mutation. Stdin plans cannot be saved because the
+        source cannot be re-read. JSON output identifies a successfully
+        persisted artifact with <code>savedPlan</code>, its exact byte length,
+        and SHA-256; all three fields are <code>null</code> when no artifact was
+        requested or a blocked/incomplete plan was not written.
+      </p>
+    </section>
+
+    <!-- ================= BATCH ================= -->
+    <section id="batch">
+      <h2><code>batch</code></h2>
+      <p>
+        Apply ordered registry operations as one compensation transaction. The
+        <a href="/schemas/batch-v1.json">versioned batch schema</a> gives every operation a unique ID
+        and embeds the same explicit JSON key/value representation used by conversion.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> batch rollout.batch.json <span class="tok-flag">--conflicts</span> error <span class="tok-flag">--view</span> both <span class="tok-flag">--backup</span> rollout.undo.reg <span class="tok-flag">-y</span> <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> batch rollout.batch.json <span class="tok-flag">--dry-run</span> <span class="tok-flag">--output</span> json</code></pre>
+      </div>
+      <p>
+        Before the first mutation, regx validates policy and captures every target in every selected view.
+        <code>--conflicts error</code> also rejects key/value collisions introduced inside an operation
+        by Smart Redirection before that shared snapshot is read.
+        The first failed operation stops the remainder and rolls all touched views back to that shared
+        pre-batch state. JSON reports each ID as <code>applied</code>, <code>planned</code>,
+        <code>skipped</code>, <code>notAttempted</code>, <code>rolledBack</code>, or
+        <code>rollbackFailed</code>, together with per-view apply details and rollback results.
+        Machine output identifies the separate
+        <a href="/schemas/batch-result-v1.json">batch result schema v1</a>.
+        Every per-view undo entry includes its path, exact byte length, and SHA-256.
+        Dry-run keeps the planned entries with null evidence; live and offline-hive
+        batches use the same contract.
       </p>
     </section>
 
@@ -604,6 +1222,11 @@ stem        updater
 <pre><code id="snippet-audit"><span class="tok-dim"># Every change recorded, then verified</span>
 regx import app.reg <span class="tok-flag">--audit-log</span> <span class="tok-str">"C:\logs\regx.jsonl"</span>
 regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
+regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span> <span class="tok-flag">--rotate-to</span> <span class="tok-str">"C:\logs\regx-001.jsonl"</span>
+regx audit <span class="tok-str">"C:\logs\regx-001.jsonl"</span> <span class="tok-flag">--chain</span> <span class="tok-str">"C:\logs\regx.jsonl"</span>
+regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span> <span class="tok-flag">--write-anchor</span> <span class="tok-str">"X:\anchors\regx.anchor"</span>
+regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span> <span class="tok-flag">--verify-anchor</span> <span class="tok-str">"X:\anchors\regx.anchor"</span>
+regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span> <span class="tok-flag">--write-anchor</span> <span class="tok-str">"X:\anchors\regx.anchor"</span> <span class="tok-flag">--anchor-key</span> <span class="tok-str">"X:\keys\anchor.key"</span>
 
   records   7
   sessions  3
@@ -611,6 +1234,26 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
 
   Chain intact: no record has been altered or removed.</code></pre>
       </div>
+
+      <p>
+        Rotation refuses a broken log or an existing archive. The new segment begins with a hashed
+        <code>segment.start</code> record that binds the previous tail hash and archive SHA-256.
+        <code>--chain</code> verifies segments in chronological order and detects editing, omission, or
+        reordering. Run rotation while regx writers are quiescent; this CLI is not a logging service.
+      </p>
+      <p>
+        <code>--write-anchor</code> atomically stores the log SHA-256, tail hash, and record count in
+        a detached checkpoint. <code>--verify-anchor</code> reports internal-chain integrity and
+        checkpoint equality separately. Keep the anchor on another host, append-only storage, or a
+        signed change ticket; placing it beside the writable log does not create a separate trust boundary.
+        <code>--anchor-key</code> writes a v2 HMAC-SHA256 checkpoint and requires the same
+        32-byte-or-longer raw secret during verification. Signed anchors reject missing or wrong keys,
+        and keyed verification refuses unsigned v1 input to prevent downgrade. Protect the key with
+        ACLs and keep it on a separate trust boundary where possible.
+        JSON write results include the exact byte length and SHA-256 of the
+        persisted rotation archive or detached anchor. Dry-run uses
+        <code>null</code> evidence because no artifact exists yet.
+      </p>
 
       <p>
         Set <code>REGX_AUDIT_LOG</code> to enforce it machine-wide, so an individual invocation
@@ -663,8 +1306,15 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
         <code>import</code>, <code>convert</code>, <code>sync</code> and <code>inspect</code> all
         accept any format below. Each reader produces the same internal model, so redirection,
         coalescing, undo snapshots and apply behave identically whatever the input was.
-        <code>regx formats</code> prints this table.
+        The <code>formats</code> command prints the same inventory from the
+        executable, including detection notes, and supports
+        <code>--output json</code> for tooling.
       </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> formats
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> formats <span class="tok-flag">--output</span> json</code></pre>
+      </div>
 
       <div class="table-scroll">
         <table>
@@ -672,8 +1322,8 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
           <tbody>
             <tr><td><code>reg</code></td><td class="muted"><code>.reg</code></td><td class="muted">UTF-16 <code>Version 5.00</code> or ANSI <code>REGEDIT4</code>.</td></tr>
             <tr><td><code>pol</code></td><td class="muted"><code>Registry.pol</code></td><td class="muted">Group Policy PReg binary. See below.</td></tr>
-            <tr><td><code>admx</code></td><td class="muted"><code>.admx</code> + <code>.adml</code></td><td class="muted">Policy template. Concrete values only; elements reported.</td></tr>
-            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences, actions C/R/U/D.</td></tr>
+            <tr><td><code>admx</code></td><td class="muted"><code>.admx</code> + <code>.adml</code></td><td class="muted">Policy template. Concrete values are read; administrator-supplied elements are fidelity losses.</td></tr>
+            <tr><td><code>gpp</code></td><td class="muted"><code>Registry.xml</code></td><td class="muted">Group Policy Preferences. Value R/U, all D, and key C/U are modeled; value C, key R, and targeting are fidelity losses.</td></tr>
             <tr><td><code>inf</code></td><td class="muted"><code>.inf</code></td><td class="muted"><code>[AddReg]</code>/<code>[DelReg]</code> with <code>[Strings]</code> substitution.</td></tr>
             <tr><td><code>json</code></td><td class="muted"><code>.json</code></td><td class="muted">Compact or explicit form.</td></tr>
             <tr><td><code>csv</code></td><td class="muted"><code>.csv</code>, <code>.tsv</code></td><td class="muted">Header-driven columns, delimiter auto-detected.</td></tr>
@@ -700,10 +1350,10 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
           <thead><tr><th scope="col">Directive</th><th scope="col">Handled as</th></tr></thead>
           <tbody>
             <tr><td><code>**del.Name</code></td><td class="muted">delete the value <code>Name</code></td></tr>
-            <tr><td><code>**delvals.</code></td><td class="muted">delete every value in the key — expressed as a key delete, which also removes subkeys, and reported as such</td></tr>
+            <tr><td><code>**delvals.</code></td><td class="muted">delete every value while preserving subkeys — reported as a fidelity loss; conversion and mutation fail closed because a key delete would be more destructive</td></tr>
             <tr><td><code>**DeleteValues</code></td><td class="muted">expands the <code>;</code>-separated list into individual value deletes</td></tr>
             <tr><td><code>**DeleteKeys</code></td><td class="muted">expands into <code>[-KEY]</code> blocks for each named subkey</td></tr>
-            <tr><td><code>**soft.Name</code></td><td class="muted">"write only if absent" — applied unconditionally, and reported, because <code>.reg</code> has no equivalent</td></tr>
+            <tr><td><code>**soft.Name</code></td><td class="muted">"write only if absent" — reported as a fidelity loss; conversion and mutation fail closed rather than overwriting an existing value</td></tr>
             <tr><td><code>**SecureKey</code>, <code>**ListElement</code></td><td class="muted">no registry effect; ignored and reported</td></tr>
           </tbody>
         </table>
@@ -736,8 +1386,9 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
         <code>decimal</code>, <code>boolean</code>, <code>enum</code>, <code>list</code>,
         <code>multiText</code>. Those hold whatever an administrator typed into the Group Policy
         editor. Inventing a value for them would put fabricated data into the registry, so
-        <code>regx</code> lists the value names a policy owns and stops there. To see what was
-        actually configured, read the <code>Registry.pol</code> instead.
+        <code>regx inspect</code> lists them as fidelity losses. Conversion and mutation fail
+        closed whenever such a loss exists. To see what was actually configured, read the
+        <code>Registry.pol</code> instead.
       </p>
       <p>
         <code>class</code> picks the hive: <code>Machine</code> → HKLM, <code>User</code> → HKCU,
@@ -756,12 +1407,24 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
         says so. That is frequently why a setting keeps coming back.
       </p>
       <p>
-        Actions <code>C</code>reate, <code>R</code>eplace and <code>U</code>pdate all end in a
-        written value; only <code>D</code> deletes, and a <code>D</code> with an empty
-        <code>name</code> deletes the whole key. <code>&lt;Collection&gt;</code> groups are
-        traversed, <code>REG_MULTI_SZ</code> entries are read from the
+        Unconditional <code>R</code>eplace and <code>U</code>pdate value writes are modeled, as
+        are all deletes and idempotent key Create/Update actions. The protocol's
+        <code>default="1"</code> attribute distinguishes a default value from a key-only item;
+        an empty <code>name</code> alone means the key. Value Create depends on absence, key Replace
+        deletes the complete subtree before recreation, bitfield/SubProp writes depend on the
+        current DWORD, item-level targeting depends on the client environment, and
+        <code>removePolicy="1"</code> requires a future undo when the GPO leaves scope. Those cases
+        are fidelity losses and block conversion/mutation rather
+        than being flattened. <code>&lt;Collection&gt;</code>
+        groups are traversed, <code>REG_MULTI_SZ</code> entries are read from the
         <code>&lt;Values&gt;</code> children rather than the <code>value</code> attribute, and items
-        marked <code>disabled="1"</code> are skipped and counted.
+        under an outer <code>RegistrySettings disabled="1"</code> are skipped as a disabled
+        preference type. Non-schema item-level <code>disabled</code> attributes are rejected.
+        The reader traverses only the protocol's
+        <code>RegistrySettings</code>/<code>Collection</code>/<code>Registry</code> grammar;
+        registry-looking descendants under unrelated XML wrappers are not accepted.
+        Content detection uses that parsed root too, so renamed valid fragments remain
+        detectable without classifying arbitrary XML by a nested tag substring.
       </p>
       <div class="callout">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -780,10 +1443,24 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span>
         Reads every <code>[AddReg]</code> and <code>[DelReg]</code> section named by an
         <code>AddReg=</code>/<code>DelReg=</code> directive; restrict it with
         <code>--inf-section</code>. <code>%Token%</code> references resolve against
-        <code>[Strings]</code>, and <code>%%</code> stays a literal percent. Unknown tokens are left
-        verbatim rather than becoming an empty string the author never intended.
-        <code>HKR</code> is skipped and reported — it is relative to a driver install context that
-        only exists inside SetupAPI, so there is no honest path to map it to.
+        <code>[Strings]</code>, and <code>%%</code> stays a literal percent. Microsoft requires
+        every token to be defined, so an unknown or unterminated token is reported as a fidelity
+        loss instead of being turned into registry data Windows would not have installed.
+        For international INF files, <code>--inf-language 0409</code> selects a four-digit
+        Windows LANGID and follows SetupAPI's exact, neutral, same-language-family, then
+        undecorated <code>[Strings]</code> fallback order. Without the option, the undecorated
+        section is selected deliberately rather than depending on the workstation locale.
+        Physical lines ending in an unquoted <code>\</code> are joined before parsing.
+        Quoted token definitions preserve edge whitespace and semicolons, collapse
+        <code>""</code> to one quote, and reject duplicate or unterminated definitions instead
+        of silently choosing one.
+        <code>HKR</code> is a fidelity loss because it is relative to a driver install context
+        that only exists inside SetupAPI. <code>NOCLOBBER</code>, <code>APPEND</code>,
+        <code>OVERWRITEONLY</code>, and per-line 32/64-bit view flags likewise require state or
+        routing absent from the common model, while a referenced <code>[Section.security]</code>
+        changes ACLs. They block conversion and mutation. Exact key-only and delete flags remain
+        usable, and custom binary registry types encoded as <code>0xTYPE0001</code> retain their
+        numeric type ID and bytes.
       </p>
 
       <h3>JSON</h3>
@@ -887,6 +1564,14 @@ Legacy =                       <span class="tok-dim">; empty value deletes it</s
         32-bit and 64-bit exports of the same application collapse onto one destination. Because that collapse
         produces duplicate key blocks, every redirect run is followed by a case-insensitive coalesce pass.
       </p>
+      <p>
+        Active Setup, User Shell Folders/Shell Folders and Winlogon are recognised
+        explicitly and refused under <code>HKLM</code>. Their machine and user
+        branches have different semantics: Active Setup's HKCU entry is a completion
+        marker, known folders should target the existing user profile (preferably
+        through the Windows Known Folder API), and Winlogon's
+        <code>Shell</code>/<code>Userinit</code> values can make sign-in unusable.
+      </p>
     </section>
 
     <!-- ================= TYPES ================= -->
@@ -965,6 +1650,8 @@ Legacy =                       <span class="tok-dim">; empty value deletes it</s
         <li><strong>Two encodings.</strong> <code>Windows Registry Editor Version 5.00</code> is UTF-16LE with a BOM; <code>REGEDIT4</code> is ANSI in the machine's codepage. A REGEDIT4 file written on one codepage decodes differently on another.</li>
         <li><strong>Continuations are hex-only.</strong> A trailing <code>\</code> continues a <code>hex</code> payload. A string value ending in <code>"C:\\"</code> is not a continuation.</li>
         <li><strong>Strings need terminators.</strong> <code>hex(1)</code>, <code>hex(2)</code> and <code>hex(7)</code> payloads must be NUL-terminated — <code>REG_MULTI_SZ</code> doubly so. Without them the consuming application reads past the value.</li>
+        <li><strong>Multiline or embedded-NUL <code>REG_SZ</code> remains lossless.</strong> Because quoted <code>.reg</code> strings cannot escape those controls, the writer automatically emits NUL-terminated UTF-16LE <code>hex(1)</code> instead.</li>
+        <li><strong>Names are checked before Win32 or the writer sees them.</strong> Embedded NUL is rejected rather than silently truncating a name; line-breaking control characters are refused because <code>.reg</code> has no name escape for them. Key components and value names are limited to 255 and 16,383 UTF-16 code units respectively.</li>
         <li><strong>Comments are line-initial.</strong> A <code>;</code> starts a comment only at the beginning of a line, and its behaviour inside a hex continuation is inconsistent in regedit itself.</li>
       </ul>
       <p>
@@ -980,7 +1667,7 @@ Legacy =                       <span class="tok-dim">; empty value deletes it</s
 
 <footer class="site-footer">
   <div class="wrap">
-    <p>regx is free software, MIT licensed. Windows 8.1 and later. x64 released; ARM64 builds in CI, untested on hardware.</p>
+    <p>regx is free software, MIT licensed. Windows 10 / Server 2016 or later. The first binary release is pending; x64 is tested and ARM64 is build-checked in CI.</p>
     <ul class="footer-links">
       <li><a href="/">Home</a></li>
       <li><a href="/#redirection">Redirection</a></li>

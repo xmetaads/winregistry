@@ -1,0 +1,165 @@
+name: Release smoke test
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to verify
+        required: true
+
+concurrency:
+  group: release-smoke-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  verify:
+    name: Download and verify release
+    runs-on: windows-latest
+    steps:
+      - name: Download published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY `
+            --dir dist --pattern "*.exe" --pattern "SHA256SUMS" `
+            --pattern "*.cdx.json"
+          foreach ($file in @(
+            "dist/regx-x86_64.exe",
+            "dist/regx-aarch64.exe",
+            "dist/regx.cdx.json",
+            "dist/SHA256SUMS"
+          )) {
+            if (-not (Test-Path $file)) { throw "missing release asset: $file" }
+          }
+
+      - name: Verify checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $entries = Get-Content dist/SHA256SUMS | ForEach-Object {
+            if ($_ -notmatch '^([0-9a-fA-F]{64})\s+\*?(.+)$') {
+              throw "malformed checksum line: $_"
+            }
+            $name = $Matches[2]
+            $allowed = @("regx-x86_64.exe", "regx-aarch64.exe", "regx.cdx.json")
+            if ($name -notin $allowed) {
+              throw "checksum names an unexpected or unsafe asset: $name"
+            }
+            [pscustomobject]@{ Hash = $Matches[1].ToLower(); Name = $name }
+          }
+          $duplicates = $entries | Group-Object Name | Where-Object Count -ne 1
+          if ($duplicates) {
+            throw "SHA256SUMS contains duplicate asset names: $($duplicates.Name -join ', ')"
+          }
+          foreach ($entry in $entries) {
+            $path = Join-Path dist $entry.Name
+            if (-not (Test-Path $path)) { throw "checksummed asset is missing: $path" }
+            $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $entry.Hash) { throw "checksum mismatch: $($entry.Name)" }
+          }
+          $downloaded = Get-ChildItem dist -File |
+            Where-Object Name -ne "SHA256SUMS" |
+            Select-Object -ExpandProperty Name
+          $listed = $entries.Name
+          $unchecked = $downloaded | Where-Object { $_ -notin $listed }
+          $missing = $listed | Where-Object { $_ -notin $downloaded }
+          if ($unchecked) { throw "release contains unchecked assets: $($unchecked -join ', ')" }
+          if ($missing) { throw "checksum lists missing assets: $($missing -join ', ')" }
+
+      - name: Verify GitHub provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          foreach ($asset in @("dist/regx-x86_64.exe", "dist/regx-aarch64.exe")) {
+            gh attestation verify $asset --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) {
+              throw "provenance verification failed for $asset"
+            }
+          }
+
+      - name: Verify executable architectures
+        shell: pwsh
+        run: |
+          $expected = @{
+            "dist/regx-x86_64.exe" = 0x8664
+            "dist/regx-aarch64.exe" = 0xAA64
+          }
+          foreach ($asset in $expected.Keys) {
+            $bytes = [IO.File]::ReadAllBytes($asset)
+            if ($bytes.Length -lt 0x40) { throw "$asset is too small to be a PE file" }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ($peOffset -lt 0 -or $peOffset + 6 -gt $bytes.Length) {
+              throw "$asset has an invalid PE header offset"
+            }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne $expected[$asset]) {
+              throw "$asset has PE machine 0x$($machine.ToString('X4')); expected 0x$($expected[$asset].ToString('X4'))"
+            }
+            "$asset PE machine 0x$($machine.ToString('X4'))"
+          }
+
+      - name: Verify CycloneDX SBOM identity
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sbom = Get-Content dist/regx.cdx.json -Raw | ConvertFrom-Json
+          if ($sbom.bomFormat -ne "CycloneDX") {
+            throw "SBOM bomFormat is '$($sbom.bomFormat)', expected CycloneDX"
+          }
+          if ($sbom.specVersion -ne "1.5") {
+            throw "SBOM specVersion is '$($sbom.specVersion)', expected 1.5"
+          }
+          if ($sbom.metadata.component.name -ne "regx") {
+            throw "SBOM component is '$($sbom.metadata.component.name)', expected regx"
+          }
+          $expectedVersion = $env:RELEASE_TAG.TrimStart("v")
+          if ($sbom.metadata.component.version -ne $expectedVersion) {
+            throw "SBOM version '$($sbom.metadata.component.version)' does not match $env:RELEASE_TAG"
+          }
+          "CycloneDX 1.5 SBOM identifies regx $expectedVersion"
+
+      - name: Verify Authenticode state is valid or deliberately absent
+        shell: pwsh
+        run: |
+          foreach ($asset in @("dist/regx-x86_64.exe", "dist/regx-aarch64.exe")) {
+            $signature = Get-AuthenticodeSignature $asset
+            if ($signature.Status -notin @("Valid", "NotSigned")) {
+              throw "$asset has invalid Authenticode state $($signature.Status)"
+            }
+            "$asset Authenticode: $($signature.Status)"
+          }
+
+      - name: Exercise the published binary
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Resolve-Path dist/regx-x86_64.exe
+          $version = @(& $exe --version)
+          if ($LASTEXITCODE -ne 0) { throw "--version failed" }
+          $expected = $env:RELEASE_TAG.TrimStart("v")
+          if ($version[0] -ne "regx $expected") {
+            throw "binary version '$($version[0])' does not match release tag $env:RELEASE_TAG"
+          }
+          if ($version -notcontains "target:  x86_64-pc-windows-msvc") {
+            throw "x64 asset reports the wrong target: $($version -join '; ')"
+          }
+          & $exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
+          # An unsigned release legitimately makes self-check return partial.
+          & $exe --self-check --output json
+          if ($LASTEXITCODE -notin 0, 5) { throw "--self-check failed with $LASTEXITCODE" }

@@ -24,10 +24,20 @@
 //! compared, without the log becoming something that needs a vault of its own.
 
 use crate::model::{RegData, RegPath, ValueName};
-use crate::sha256::{hash_hex, Sha256};
+use crate::sha256::{constant_time_eq, hash_hex, hmac_hex, Sha256};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Seek, Write};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
+    fn GetLastError() -> u32;
+}
+
+const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outcome {
@@ -208,10 +218,250 @@ pub struct Verification {
     pub broken: Vec<(usize, String)>,
 }
 
+#[derive(Debug)]
+pub struct ChainVerification {
+    pub files: usize,
+    pub records: usize,
+    pub sessions: usize,
+    pub broken: Vec<(usize, String)>,
+}
+
+impl ChainVerification {
+    pub fn is_intact(&self) -> bool {
+        self.broken.is_empty()
+    }
+}
+
+#[derive(Debug)]
+pub struct Rotation {
+    pub archived_records: usize,
+    pub archived_hash: String,
+    pub archived_sha256: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub sha256: String,
+    pub tail_hash: String,
+    pub records: usize,
+}
+
+impl Anchor {
+    pub fn matches(&self, other: &Anchor) -> bool {
+        self == other
+    }
+}
+
 impl Verification {
     pub fn is_intact(&self) -> bool {
         self.broken.is_empty()
     }
+}
+
+/// Persist a detached checkpoint. Keeping this small, text-only artifact on a
+/// different trust boundary (append-only storage, another host, or a signed
+/// ticket) makes a coordinated rewrite of the entire local log detectable.
+#[cfg(test)]
+pub fn write_anchor(log: &Path, destination: &Path) -> std::io::Result<Anchor> {
+    write_anchor_with_key(log, destination, None).map(|(anchor, _)| anchor)
+}
+
+/// Write an unsigned v1 anchor or an HMAC-authenticated v2 anchor.
+pub fn write_anchor_with_key(
+    log: &Path,
+    destination: &Path,
+    key: Option<&[u8]>,
+) -> std::io::Result<(Anchor, bool)> {
+    if let Some(key) = key {
+        validate_anchor_key(key)?;
+    }
+    if log == destination
+        || (destination.exists()
+            && std::fs::canonicalize(log).ok() == std::fs::canonicalize(destination).ok())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "audit log and detached anchor must be different files",
+        ));
+    }
+    let before = file_digest(log)?;
+    let verification = verify(log)?;
+    if !verification.is_intact() || verification.records == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "refusing to anchor an empty or broken audit log",
+        ));
+    }
+    let anchor = current_anchor(log, verification.records)?;
+    if anchor.sha256 != before || file_digest(log)? != before {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "audit log changed while its anchor was being created",
+        ));
+    }
+    let (text, signed) = match key {
+        None => (
+            format!(
+                "regx-audit-anchor-v1\nsha256 {}\ntail {}\nrecords {}\n",
+                anchor.sha256, anchor.tail_hash, anchor.records
+            ),
+            false,
+        ),
+        Some(key) => {
+            let authenticated = format!(
+                "regx-audit-anchor-v2\nsha256 {}\ntail {}\nrecords {}\nalgorithm hmac-sha256\n",
+                anchor.sha256, anchor.tail_hash, anchor.records
+            );
+            let signature = hmac_hex(key, authenticated.as_bytes());
+            (format!("{authenticated}signature {signature}\n"), true)
+        }
+    };
+    crate::file_io::atomic_write(destination, text.as_bytes())?;
+    if file_digest(log)? != anchor.sha256 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "audit log changed before its detached anchor was committed",
+        ));
+    }
+    Ok((anchor, signed))
+}
+
+#[cfg(test)]
+pub fn verify_anchor(log: &Path, anchor_path: &Path) -> std::io::Result<(Anchor, Anchor)> {
+    verify_anchor_with_key(log, anchor_path, None).map(|(expected, actual, _)| (expected, actual))
+}
+
+/// Verify the anchor authentication before comparing it with the live log.
+///
+/// Supplying a key for an unsigned anchor is rejected to prevent an attacker
+/// from downgrading a signed checkpoint to v1.
+pub fn verify_anchor_with_key(
+    log: &Path,
+    anchor_path: &Path,
+    key: Option<&[u8]>,
+) -> std::io::Result<(Anchor, Anchor, bool)> {
+    if let Some(key) = key {
+        validate_anchor_key(key)?;
+    }
+    let verification = verify(log)?;
+    let actual = current_anchor(log, verification.records)?;
+    let (expected, signed) = read_anchor(anchor_path, key)?;
+    Ok((expected, actual, signed))
+}
+
+fn validate_anchor_key(key: &[u8]) -> std::io::Result<()> {
+    if !(32..=64 * 1024).contains(&key.len()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "audit anchor key must contain 32 to 65536 raw bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn current_anchor(log: &Path, records: usize) -> std::io::Result<Anchor> {
+    let tail_hash = last_hash(log).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "audit log has no tail hash",
+        )
+    })?;
+    Ok(Anchor {
+        sha256: file_digest(log)?,
+        tail_hash,
+        records,
+    })
+}
+
+fn read_anchor(path: &Path, key: Option<&[u8]>) -> std::io::Result<(Anchor, bool)> {
+    let text = std::fs::read_to_string(path)?;
+    let mut lines = text.lines();
+    let header = lines.next();
+    if header != Some("regx-audit-anchor-v1") && header != Some("regx-audit-anchor-v2") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unsupported audit anchor header",
+        ));
+    }
+    let sha256 = anchor_field(lines.next(), "sha256")?;
+    let tail_hash = anchor_field(lines.next(), "tail")?;
+    let records = anchor_field(lines.next(), "records")?
+        .parse::<usize>()
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid anchor record count",
+            )
+        })?;
+    let signed = header == Some("regx-audit-anchor-v2");
+    if signed {
+        if anchor_field(lines.next(), "algorithm")? != "hmac-sha256" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported audit anchor authentication algorithm",
+            ));
+        }
+        let signature = anchor_field(lines.next(), "signature")?;
+        if signature.len() != 64 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "malformed audit anchor signature",
+            ));
+        }
+        let key = key.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "signed audit anchor requires an authentication key",
+            )
+        })?;
+        let authenticated = format!(
+            "regx-audit-anchor-v2\nsha256 {sha256}\ntail {tail_hash}\nrecords {records}\nalgorithm hmac-sha256\n"
+        );
+        let expected_signature = hmac_hex(key, authenticated.as_bytes());
+        if !constant_time_eq(signature.as_bytes(), expected_signature.as_bytes()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "audit anchor signature does not match the supplied key",
+            ));
+        }
+    } else if key.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "refusing unsigned audit anchor while an authentication key is required",
+        ));
+    }
+    if lines.any(|line| !line.trim().is_empty())
+        || sha256.len() != 64
+        || tail_hash.len() != 64
+        || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !tail_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "malformed audit anchor",
+        ));
+    }
+    Ok((
+        Anchor {
+            sha256,
+            tail_hash,
+            records,
+        },
+        signed,
+    ))
+}
+
+fn anchor_field(line: Option<&str>, name: &str) -> std::io::Result<String> {
+    line.and_then(|line| line.strip_prefix(name))
+        .and_then(|value| value.strip_prefix(' '))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("audit anchor is missing {name}"),
+            )
+        })
 }
 
 /// Re-hash every record and confirm each one names its predecessor.
@@ -269,6 +519,219 @@ pub fn verify(path: &Path) -> std::io::Result<Verification> {
 
     v.sessions = seen_sessions.len();
     Ok(v)
+}
+
+/// Verify independently hashed segments and the marker linking each segment to
+/// the exact bytes and tail record of its predecessor.
+pub fn verify_chain(paths: &[PathBuf]) -> std::io::Result<ChainVerification> {
+    let mut result = ChainVerification {
+        files: paths.len(),
+        records: 0,
+        sessions: 0,
+        broken: Vec::new(),
+    };
+    if paths.is_empty() {
+        result
+            .broken
+            .push((0, "audit chain contains no files".into()));
+        return Ok(result);
+    }
+
+    let mut previous_tail: Option<String> = None;
+    let mut previous_digest: Option<String> = None;
+    for (index, path) in paths.iter().enumerate() {
+        let verification = verify(path)?;
+        result.records += verification.records;
+        result.sessions += verification.sessions;
+        for (line, problem) in verification.broken {
+            result
+                .broken
+                .push((index, format!("{} line {line}: {problem}", path.display())));
+        }
+
+        if index > 0 {
+            let first = first_body(path)?;
+            let expected_tail = previous_tail.as_deref().unwrap_or("");
+            let expected_digest = previous_digest.as_deref().unwrap_or("");
+            if field(&first, "event") != Some("segment.start") {
+                result.broken.push((
+                    index,
+                    format!("{} does not begin with segment.start", path.display()),
+                ));
+            }
+            if field(&first, "previousHash") != Some(expected_tail) {
+                result.broken.push((
+                    index,
+                    format!(
+                        "{} does not link to the previous segment tail",
+                        path.display()
+                    ),
+                ));
+            }
+            if field(&first, "previousSha256") != Some(expected_digest) {
+                result.broken.push((
+                    index,
+                    format!(
+                        "{} does not bind the previous segment bytes",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        previous_tail = last_hash(path);
+        previous_digest = Some(file_digest(path)?);
+    }
+    Ok(result)
+}
+
+/// Archive an intact active log and replace it with a genesis segment marker
+/// that cryptographically binds the archived bytes and tail record.
+pub fn rotate(active: &Path, archive: &Path) -> std::io::Result<Rotation> {
+    if archive.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} already exists", archive.display()),
+        ));
+    }
+    let mut source = std::fs::File::open(active)?;
+    let verification = verify(active)?;
+    if !verification.is_intact() || verification.records == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "refusing to rotate an empty or broken audit log",
+        ));
+    }
+    let before = file_digest(active)?;
+    let tail = last_hash(active).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "audit log has no tail hash",
+        )
+    })?;
+
+    source.seek(std::io::SeekFrom::Start(0))?;
+    let mut destination = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(archive)?;
+    if let Err(error) = std::io::copy(&mut source, &mut destination) {
+        drop(destination);
+        let _ = std::fs::remove_file(archive);
+        return Err(error);
+    }
+    if let Err(error) = destination.sync_all() {
+        drop(destination);
+        let _ = std::fs::remove_file(archive);
+        return Err(error);
+    }
+    drop(destination);
+    let archived_digest = file_digest(archive)?;
+    let after = file_digest(active)?;
+    if archived_digest != before || after != before {
+        let _ = std::fs::remove_file(archive);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "active audit log changed while it was being rotated",
+        ));
+    }
+
+    let marker = segment_start_line(&tail, &archived_digest);
+    replace_active_segment(active, marker.as_bytes())?;
+    Ok(Rotation {
+        archived_records: verification.records,
+        archived_hash: tail,
+        archived_sha256: archived_digest,
+    })
+}
+
+fn replace_active_segment(active: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let stem = active
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audit");
+    let temp = active.with_file_name(format!(
+        ".{stem}.rotate-{}-{}.tmp",
+        std::process::id(),
+        now_iso8601().replace([':', '-'], "")
+    ));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    drop(file);
+    let old = wide_path(active);
+    let new = wide_path(&temp);
+    // SAFETY: both paths are NUL-terminated and remain alive for the call.
+    let ok = unsafe {
+        MoveFileExW(
+            new.as_ptr(),
+            old.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { GetLastError() };
+        // Some managed sandboxes and hardened volumes deny replace semantics
+        // even though the existing file is writable. The archive is already
+        // durably synced, so an in-place rewrite cannot lose the old segment;
+        // it only forfeits atomic visibility of the new marker.
+        if code == 5 {
+            let result = std::fs::write(active, bytes);
+            let _ = std::fs::remove_file(&temp);
+            return result;
+        }
+        let _ = std::fs::remove_file(&temp);
+        return Err(std::io::Error::from_raw_os_error(code as i32));
+    }
+    Ok(())
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    let mut value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    value.push(0);
+    value
+}
+
+fn first_body(path: &Path) -> std::io::Result<String> {
+    let text = std::fs::read_to_string(path)?;
+    let first = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "empty segment"))?;
+    let (body, _) = split_hash(first.trim()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "first segment record has no hash",
+        )
+    })?;
+    Ok(body.to_string())
+}
+
+fn segment_start_line(previous_hash: &str, previous_sha256: &str) -> String {
+    let session = hash_hex(format!("rotate|{}|{}", now_iso8601(), std::process::id()).as_bytes())
+        [..16]
+        .to_string();
+    let fields = [
+        ("ts", jstr(&now_iso8601())),
+        ("session", jstr(&session)),
+        ("seq", "1".into()),
+        ("event", jstr("segment.start")),
+        ("previousHash", jstr(previous_hash)),
+        ("previousSha256", jstr(previous_sha256)),
+        ("prev", jstr("genesis")),
+    ];
+    let body = fields
+        .iter()
+        .map(|(key, value)| format!("{}: {value}", jstr(key)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hash = hash_hex(body.as_bytes());
+    format!("{{{body}, \"hash\": {}}}\n", jstr(&hash))
 }
 
 /// Split a record into the body that was hashed and the hash it states.
@@ -366,7 +829,7 @@ pub fn file_digest(path: &Path) -> std::io::Result<String> {
     Ok(crate::sha256::hex(&h.finish()))
 }
 
-fn last_hash(path: &Path) -> Option<String> {
+pub fn last_hash(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
     split_hash(last.trim()).map(|(_, h)| h.to_string())
@@ -504,6 +967,94 @@ mod tests {
     }
 
     #[test]
+    fn detached_anchor_detects_a_complete_valid_rewrite() {
+        let p = scratch("anchor-log");
+        let anchor_path = scratch("anchor-checkpoint");
+        let mut logger = Logger::open(&p, true, "regx set ...").unwrap();
+        logger.record(Event {
+            op: Op::ValueSet,
+            path: &path(),
+            name: Some(&ValueName::Named("Channel".into())),
+            before: None,
+            after: Some(&RegData::Sz("stable".into())),
+            outcome: Outcome::Applied,
+            detail: None,
+        });
+        drop(logger);
+
+        let original = std::fs::read(&p).unwrap();
+        assert_eq!(
+            write_anchor(&p, &p).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(std::fs::read(&p).unwrap(), original);
+
+        let written = write_anchor(&p, &anchor_path).unwrap();
+        let (expected, actual) = verify_anchor(&p, &anchor_path).unwrap();
+        assert_eq!(written, expected);
+        assert!(expected.matches(&actual));
+
+        // Append a perfectly valid new session. The internal chain remains
+        // intact, but the detached checkpoint must no longer match.
+        drop(Logger::open(&p, true, "regx delete ...").unwrap());
+        assert!(verify(&p).unwrap().is_intact());
+        let (expected, actual) = verify_anchor(&p, &anchor_path).unwrap();
+        assert!(!expected.matches(&actual));
+
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&anchor_path);
+    }
+
+    #[test]
+    fn signed_anchor_rejects_wrong_key_tampering_and_downgrade() {
+        let log = scratch("signed-anchor-log");
+        let signed_path = scratch("signed-anchor-checkpoint");
+        let unsigned_path = scratch("unsigned-anchor-checkpoint");
+        let mut logger = Logger::open(&log, true, "regx set ...").unwrap();
+        logger.record(Event {
+            op: Op::ValueSet,
+            path: &path(),
+            name: Some(&ValueName::Named("Channel".into())),
+            before: None,
+            after: Some(&RegData::Sz("stable".into())),
+            outcome: Outcome::Applied,
+            detail: None,
+        });
+        drop(logger);
+        let key = [0x41u8; 32];
+        let wrong = [0x42u8; 32];
+
+        let (_, signed) = write_anchor_with_key(&log, &signed_path, Some(&key)).unwrap();
+        assert!(signed);
+        assert!(
+            verify_anchor_with_key(&log, &signed_path, Some(&key))
+                .unwrap()
+                .2
+        );
+        assert!(verify_anchor_with_key(&log, &signed_path, Some(&wrong))
+            .unwrap_err()
+            .to_string()
+            .contains("signature does not match"));
+        assert!(verify_anchor_with_key(&log, &signed_path, None)
+            .unwrap_err()
+            .to_string()
+            .contains("requires an authentication key"));
+
+        let text = std::fs::read_to_string(&signed_path).unwrap();
+        std::fs::write(&signed_path, text.replace("sha256 ", "sha256 0")).unwrap();
+        assert!(verify_anchor_with_key(&log, &signed_path, Some(&key)).is_err());
+
+        write_anchor(&log, &unsigned_path).unwrap();
+        assert!(verify_anchor_with_key(&log, &unsigned_path, Some(&key))
+            .unwrap_err()
+            .to_string()
+            .contains("refusing unsigned"));
+        let _ = std::fs::remove_file(log);
+        let _ = std::fs::remove_file(signed_path);
+        let _ = std::fs::remove_file(unsigned_path);
+    }
+
+    #[test]
     fn a_utf8_bom_is_not_mistaken_for_tampering() {
         let p = scratch("bom");
         let mut l = Logger::open(&p, false, "regx set ...").unwrap();
@@ -624,6 +1175,81 @@ mod tests {
         assert_eq!(v.sessions, 2);
         assert_eq!(v.records, 4);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn rotated_segments_preserve_a_verifiable_cross_file_chain() {
+        let active = scratch("rotate-active");
+        let archive = scratch("rotate-archive");
+        let mut first = Logger::open(&active, false, "first").unwrap();
+        first.record(Event {
+            op: Op::KeyCreate,
+            path: &path(),
+            name: None,
+            before: None,
+            after: None,
+            outcome: Outcome::Applied,
+            detail: None,
+        });
+        drop(first);
+
+        let rotation = rotate(&active, &archive).unwrap();
+        assert_eq!(rotation.archived_records, 2);
+        let mut second = Logger::open(&active, false, "second").unwrap();
+        second.record(Event {
+            op: Op::KeyDelete,
+            path: &path(),
+            name: None,
+            before: None,
+            after: None,
+            outcome: Outcome::Applied,
+            detail: None,
+        });
+        drop(second);
+
+        let files = vec![archive.clone(), active.clone()];
+        let chain = verify_chain(&files).unwrap();
+        assert!(chain.is_intact(), "{:?}", chain.broken);
+        assert_eq!(chain.files, 2);
+        assert_eq!(chain.records, 5);
+
+        let reversed = verify_chain(&[active.clone(), archive.clone()]).unwrap();
+        assert!(!reversed.is_intact(), "segment reordering must be detected");
+        let _ = std::fs::remove_file(active);
+        let _ = std::fs::remove_file(archive);
+    }
+
+    #[test]
+    fn rotated_chain_detects_an_edited_archive() {
+        let active = scratch("rotate-edit-active");
+        let archive = scratch("rotate-edit-archive");
+        let mut logger = Logger::open(&active, false, "first").unwrap();
+        logger.record(Event {
+            op: Op::ValueSet,
+            path: &path(),
+            name: Some(&ValueName::Named("Mode".into())),
+            before: None,
+            after: Some(&RegData::Sz("before".into())),
+            outcome: Outcome::Applied,
+            detail: None,
+        });
+        drop(logger);
+        rotate(&active, &archive).unwrap();
+
+        let text = std::fs::read_to_string(&archive).unwrap();
+        std::fs::write(&archive, text.replace("before", "after")).unwrap();
+        let chain = verify_chain(&[archive.clone(), active.clone()]).unwrap();
+        assert!(!chain.is_intact());
+        assert!(
+            chain
+                .broken
+                .iter()
+                .any(|(_, problem)| problem.contains("does not match")),
+            "{:?}",
+            chain.broken
+        );
+        let _ = std::fs::remove_file(active);
+        let _ = std::fs::remove_file(archive);
     }
 
     #[test]

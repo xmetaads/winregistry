@@ -1,0 +1,54 @@
+name: Parser fuzz smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/encoding.rs"
+      - "src/model.rs"
+      - "src/parser.rs"
+      - "src/value.rs"
+      - "src/xml.rs"
+      - "src/coalesce.rs"
+      - "src/formats/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/encoding.rs"
+      - "src/model.rs"
+      - "src/parser.rs"
+      - "src/value.rs"
+      - "src/xml.rs"
+      - "src/coalesce.rs"
+      - "src/formats/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "41 3 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: libFuzzer + AddressSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Verify checked-in seed corpus
+        run: cargo test --manifest-path fuzz/Cargo.toml --test seed_corpus
+      - name: Fuzz every parser family
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in reg_bytes xml_bytes all_formats; do
+            cargo +nightly fuzz run --features fuzzing "$target" "fuzz/corpus/$target" -- \
+              -runs=10000 -max_len=65536 -timeout=10
+          done

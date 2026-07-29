@@ -1,0 +1,1 @@
+7<?xml version="1.0"?><RegistrySettings><Registry name="seed" status="Enabled"><Properties action="U" hive="HKEY_CURRENT_USER" key="Software\regx-fuzz" name="Name" type="REG_SZ" value="seed"/></Registry></RegistrySettings>
