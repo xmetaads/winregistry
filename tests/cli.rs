@@ -3915,8 +3915,14 @@ fn live_ls_lists_keys_without_exposing_values() {
     assert!(report["computer"].is_null());
     let keys = report["views"][0]["keys"].as_array().unwrap();
     assert_eq!(keys.len(), 2);
-    assert!(keys.iter().any(|key| key == &serde_json::json!(child)));
-    assert!(keys.iter().any(|key| key == &serde_json::json!(grandchild)));
+    assert!(keys
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|key| key.ends_with("\\Child")));
+    assert!(keys
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|key| key.ends_with("\\Child\\Grandchild")));
     assert!(!stdout(&recursive).contains("secret-"));
 
     let scoped = run(&[
