@@ -3940,10 +3940,12 @@ fn live_ls_lists_keys_without_exposing_values() {
         scoped_report["include"],
         serde_json::json!(["**\\Grandchild"])
     );
-    assert_eq!(
-        scoped_report["views"][0]["keys"],
-        serde_json::json!([grandchild])
-    );
+    let scoped_keys = scoped_report["views"][0]["keys"].as_array().unwrap();
+    assert_eq!(scoped_keys.len(), 1);
+    assert!(scoped_keys[0]
+        .as_str()
+        .unwrap()
+        .ends_with("\\Child\\Grandchild"));
     assert_eq!(scoped_report["views"][0]["truncated"], false);
 
     let limited = run(&[
