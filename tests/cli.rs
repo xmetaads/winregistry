@@ -629,19 +629,37 @@ fn failed_batch_rolls_back_earlier_operations() {
     }
     let d = Scratch::new("batch-rollback");
     let key = LiveKey::new("batch-rollback");
+    let manifest_json = serde_json::json!({
+        "schema": "https://winregistry.org/schemas/batch-v1.json",
+        "schemaVersion": 1,
+        "operations": [
+            {
+                "id": "write-user",
+                "keys": [{
+                    "path": key.as_str(),
+                    "values": [{
+                        "name": "Transient",
+                        "type": "REG_SZ",
+                        "data": "remove-me"
+                    }]
+                }]
+            },
+            {
+                "id": "deny-machine",
+                "keys": [{
+                    "path": "HKLM\\SYSTEM\\regx-batch-denied",
+                    "values": [{
+                        "name": "X",
+                        "type": "REG_DWORD",
+                        "data": 1
+                    }]
+                }]
+            }
+        ]
+    });
     let manifest = d.write(
         "batch.json",
-        &format!(
-            r#"{{
-              "schema":"https://winregistry.org/schemas/batch-v1.json",
-              "schemaVersion":1,
-              "operations":[
-                {{"id":"write-user","keys":[{{"path":"{}","values":[{{"name":"Transient","type":"REG_SZ","data":"remove-me"}}]}}]}},
-                {{"id":"deny-machine","keys":[{{"path":"HKLM\\SYSTEM\\regx-batch-denied","values":[{{"name":"X","type":"REG_DWORD","data":1}}]}}]}}
-              ]
-            }}"#,
-            key.as_str()
-        ),
+        &serde_json::to_string_pretty(&manifest_json).unwrap(),
     );
     let applied = run(&[
         "batch",
