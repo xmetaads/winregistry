@@ -2603,7 +2603,7 @@ fn plan_is_structured_and_never_writes() {
         &reg,
     );
     assert_eq!(code(&saved_stdin), USAGE);
-    assert!(stderr(&saved_stdin).contains("stdin cannot be re-verified"));
+    assert!(stderr(&saved_stdin).contains("stream input cannot be re-verified"));
 
     let dry_run_save = run(&[
         "plan",
