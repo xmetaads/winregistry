@@ -12,6 +12,7 @@ mod fingerprint;
 mod fix;
 mod formats;
 mod hive;
+mod ipc;
 mod model;
 mod parser;
 mod policy;
@@ -42,6 +43,8 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use winreg::View;
+
+const MAX_REGISTRY_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// An input file that could not be read as registry data.
 ///
@@ -671,28 +674,51 @@ fn is_stdin(path: &Path) -> bool {
     path.as_os_str() == "-"
 }
 
+fn is_stream_input(path: &Path) -> bool {
+    is_stdin(path) || ipc::is_named_pipe(path)
+}
+
 fn input_label(path: &Path) -> String {
     if is_stdin(path) {
         "<stdin>".to_string()
+    } else if ipc::is_named_pipe(path) {
+        ipc::label(path)
     } else {
         path.display().to_string()
     }
 }
 
-/// Read a named file or standard input when the conventional `-` path is used.
+/// Read a named file, standard input, or a one-shot Windows named pipe.
 ///
 /// Callers that accept more than one input first use `ensure_single_stdin` so
 /// the stream is never consumed once and then silently seen as empty.
 fn read_input_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     if is_stdin(path) {
-        let mut bytes = Vec::new();
-        std::io::stdin()
-            .read_to_end(&mut bytes)
-            .context("cannot read <stdin>")?;
-        Ok(bytes)
+        read_bounded(std::io::stdin().lock(), MAX_REGISTRY_INPUT_BYTES, "<stdin>")
+    } else if ipc::is_named_pipe(path) {
+        ipc::read(path, MAX_REGISTRY_INPUT_BYTES).map_err(|error| anyhow!(error))
     } else {
-        std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))
+        file_io::read_limited(path, MAX_REGISTRY_INPUT_BYTES, "registry-data input")
+            .map_err(|error| anyhow!(error))
     }
+}
+
+fn read_bounded(
+    reader: impl std::io::Read,
+    max_bytes: u64,
+    label: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("cannot read {label}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(anyhow!(
+            "registry-data input exceeds the {max_bytes}-byte size limit: {label}"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn ensure_single_stdin<'a>(paths: impl IntoIterator<Item = &'a Path>) -> anyhow::Result<()> {
@@ -759,9 +785,14 @@ fn read_any(cli: &Cli, path: &Path, o: &cli::InputOpts) -> anyhow::Result<format
         None => None,
     };
 
-    // stdin has no extension to use as a tie-breaker; content detection still
-    // handles every distinctive format, and --from resolves ambiguous text.
-    let hint = if is_stdin(path) { None } else { Some(path) };
+    // Streams have no trustworthy extension to use as a tie-breaker; content
+    // detection still handles every distinctive format, and --from resolves
+    // ambiguous text.
+    let hint = if is_stream_input(path) {
+        None
+    } else {
+        Some(path)
+    };
     let outcome = formats::read(&bytes, hint, forced, &read_options(o)?).map_err(|e| {
         anyhow!(InputError {
             source: input_label(path),
@@ -1153,14 +1184,14 @@ fn cmd_validate(
         ));
     }
     ensure_single_stdin(files.iter().map(PathBuf::as_path))?;
-    if do_fix && files.iter().any(|p| is_stdin(p)) && out.is_none() {
+    if do_fix && files.iter().any(|p| is_stream_input(p)) && out.is_none() {
         return Err(usage(
-            "`validate - --fix` requires --out because stdin cannot be rewritten",
+            "`validate` stream input with `--fix` requires --out because a stream cannot be rewritten",
         ));
     }
-    if keep_backup && files.iter().any(|p| is_stdin(p)) {
+    if keep_backup && files.iter().any(|p| is_stream_input(p)) {
         return Err(usage(
-            "`validate - --backup` is not meaningful for standard input",
+            "`validate --backup` is not meaningful for stream input",
         ));
     }
     let mut worst = exit::OK;
@@ -1919,12 +1950,12 @@ fn cmd_import(cli: &Cli, policy: &policy::Policy, job: ImportJob<'_>) -> anyhow:
         conflicts,
     } = job;
 
-    if files.iter().any(|p| is_stdin(p))
+    if files.iter().any(|p| is_stream_input(p))
         && !cli.global.dry_run
         && (!cli.global.yes || policy.require_confirm)
     {
         return Err(usage(
-            "importing from stdin requires -y (and cannot be used when policy \
+            "importing from stdin or a named pipe requires -y (and cannot be used when policy \
              requires interactive confirmation)",
         ));
     }
@@ -2011,8 +2042,8 @@ fn cmd_import(cli: &Cli, policy: &policy::Policy, job: ImportJob<'_>) -> anyhow:
     let mut undo_paths = Vec::new();
     if let Some(snapshots) = &snapshots {
         let base = backup.map(Path::to_path_buf).unwrap_or_else(|| {
-            if is_stdin(&files[0]) {
-                undo::temporary_path("stdin")
+            if is_stream_input(&files[0]) {
+                undo::temporary_path("stream")
             } else {
                 undo::default_path(&files[0])
             }
@@ -2544,9 +2575,9 @@ fn cmd_plan(cli: &Cli, policy: &policy::Policy, job: PlanJob<'_>) -> anyhow::Res
         save,
         conflicts,
     } = job;
-    if save.is_some() && files.iter().any(|path| is_stdin(path)) {
+    if save.is_some() && files.iter().any(|path| is_stream_input(path)) {
         return Err(usage(
-            "a saved plan requires named source files; stdin cannot be re-verified",
+            "a saved plan requires named source files; stream input cannot be re-verified",
         ));
     }
     let prepared = prepare_import(cli, policy, files, iopts, ropts, conflicts)?;
@@ -2606,8 +2637,8 @@ fn cmd_plan(cli: &Cli, policy: &policy::Policy, job: PlanJob<'_>) -> anyhow::Res
             .push(("subkey reconciliation".into(), error));
     }
     let rollback = undo::snapshot(&roots, effective, view);
-    let rollback_path = if is_stdin(&files[0]) {
-        undo::temporary_path("stdin-plan")
+    let rollback_path = if is_stream_input(&files[0]) {
+        undo::temporary_path("stream-plan")
     } else {
         undo::default_path(&files[0])
     };
@@ -2801,8 +2832,8 @@ fn cmd_plan_both(
     let prune_keys = job.prune_keys;
     let save = job.save;
     let roots = Roots::live();
-    let base_path = if is_stdin(&files[0]) {
-        undo::temporary_path("stdin-plan")
+    let base_path = if is_stream_input(&files[0]) {
+        undo::temporary_path("stream-plan")
     } else {
         undo::default_path(&files[0])
     };
@@ -6774,7 +6805,7 @@ fn cmd_stats(
         ));
     }
     let file = Path::new(source);
-    if !is_stdin(file) && !file.exists() {
+    if !is_stream_input(file) && !file.exists() {
         return Err(anyhow!(
             "{source:?} is neither an existing file nor a registry path starting with a known root"
         ));
@@ -7037,7 +7068,7 @@ fn cmd_fingerprint(cli: &Cli, job: FingerprintJob<'_>) -> anyhow::Result<i32> {
         ));
     }
     let file = Path::new(source);
-    if !is_stdin(file) && !file.exists() {
+    if !is_stream_input(file) && !file.exists() {
         return Err(anyhow!(
             "{source:?} is neither an existing file nor a registry path starting with a known root"
         ));
@@ -10496,7 +10527,7 @@ fn read_source_for_view(
         )));
     }
     let file = Path::new(spec);
-    if !is_stdin(file) && !file.exists() {
+    if !is_stream_input(file) && !file.exists() {
         return Err(anyhow!(
             "{spec:?} is neither an existing file nor a registry path starting with a known root"
         ));
@@ -12032,6 +12063,13 @@ fn cmd_self_check(g: &GlobalOpts, policy: &policy::Policy) -> i32 {
 #[cfg(test)]
 mod main_tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn stream_reader_enforces_the_registry_input_limit() {
+        let error = read_bounded(Cursor::new(vec![0_u8; 5]), 4, "<test-stream>").unwrap_err();
+        assert!(error.to_string().contains("4-byte size limit"), "{error}");
+    }
 
     #[test]
     fn value_selection_never_leaks_whole_key_operations() {

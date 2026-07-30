@@ -25,7 +25,7 @@ major version bump:
 Human-readable stdout and stderr text is *not* part of the contract. Parse the
 JSON.
 
-## [0.2.0] - 2026-07-29
+## [0.2.0] - 2026-07-30
 
 The first binary release. Everything below was developed after `0.1.0`; the
 `v0.2.0` tag binds these notes to the matching Cargo package and release
@@ -33,6 +33,12 @@ artifacts.
 
 ### Added
 
+- File-reading commands accept bounded, one-shot Windows Named Pipe input via
+  `pipe:NAME`, `\\.\pipe\NAME`, or `//./pipe/NAME`, in addition to stdin.
+  Connections time out after five seconds and registry-data streams are capped
+  at 64 MiB. Mutations require `-y`, repairs require `--out`, and saved plans
+  reject non-reverifiable streams. Real process-to-process IPC, timeout, and
+  size-bound tests cover the contract.
 - `stats` now accepts the same repeatable key-path and value-name include/
   exclude globs as scoped fingerprint/export across file, live, remote,
   dual-view, and offline-hive sources. JSON binds the scope to `matched` and

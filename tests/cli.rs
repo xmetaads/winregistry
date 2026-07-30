@@ -11,6 +11,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Exit codes, mirrored from src/cli.rs. Duplicated on purpose: if someone
 // changes the constant, this file should fail rather than silently agree.
@@ -70,6 +71,60 @@ fn run_stdin(args: &[&str], input: &str) -> Output {
         .write_all(input.as_bytes())
         .expect("failed to write stdin");
     child.wait_with_output().expect("failed to wait for regx")
+}
+
+#[cfg(windows)]
+fn run_named_pipe(args: &[&str], input: &str) -> Output {
+    static NEXT_PIPE: AtomicU64 = AtomicU64::new(1);
+    let pipe_name = format!(
+        "regx-it-{}-{}",
+        std::process::id(),
+        NEXT_PIPE.fetch_add(1, Ordering::Relaxed)
+    );
+    let hex: String = input
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let script = format!(
+        "$hex='{hex}'; \
+         [byte[]]$bytes=for($i=0;$i -lt $hex.Length;$i+=2){{\
+           [Convert]::ToByte($hex.Substring($i,2),16)\
+         }}; \
+         $pipe=[IO.Pipes.NamedPipeServerStream]::new(\
+           '{pipe_name}',[IO.Pipes.PipeDirection]::Out,1,\
+           [IO.Pipes.PipeTransmissionMode]::Byte); \
+         try{{$pipe.WaitForConnection();$pipe.Write($bytes,0,$bytes.Length);$pipe.Flush()}}\
+         finally{{$pipe.Dispose()}}"
+    );
+    let producer = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to launch named-pipe producer");
+
+    let source = format!("pipe:{pipe_name}");
+    let expanded: Vec<&str> = args
+        .iter()
+        .map(|arg| {
+            if *arg == "{PIPE}" {
+                source.as_str()
+            } else {
+                arg
+            }
+        })
+        .collect();
+    let output = run(&expanded);
+    let producer_output = producer
+        .wait_with_output()
+        .expect("failed to wait for named-pipe producer");
+    assert!(
+        producer_output.status.success(),
+        "named-pipe producer failed: {}",
+        String::from_utf8_lossy(&producer_output.stderr)
+    );
+    output
 }
 
 fn code(o: &Output) -> i32 {
@@ -1533,6 +1588,21 @@ fn file_reading_commands_accept_stdin_once() {
     let repeated = run_stdin(&["merge", "-", "-"], reg);
     assert_eq!(code(&repeated), USAGE);
     assert!(stderr(&repeated).contains("can only be used once"));
+}
+
+#[cfg(windows)]
+#[test]
+fn file_reading_commands_accept_windows_named_pipe_input() {
+    let reg = concat!(
+        "Windows Registry Editor Version 5.00\n\n",
+        "[HKEY_CURRENT_USER\\Software\\regx-pipe-contract]\n",
+        "\"Name\"=\"memory-only\"\n"
+    );
+
+    let converted = run_named_pipe(&["convert", "{PIPE}", "--redirect", "off"], reg);
+    assert_eq!(code(&converted), OK, "{}", stderr(&converted));
+    assert!(stdout(&converted).contains("regx-pipe-contract"));
+    assert!(stderr(&converted).contains("<pipe:regx-it-"));
 }
 
 #[test]

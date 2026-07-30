@@ -228,10 +228,11 @@ regx import app.reg
 regx undo app.undo.reg</code></pre>
       </div>
 
-      <h3>Use stdin in a pipeline</h3>
+      <h3>Stream data through stdin or Windows Named Pipes</h3>
       <p>
-        Commands that read registry data accept <code>-</code> once for standard input. This avoids temporary
-        files while preserving content-based format detection.
+        Commands that read registry data accept <code>-</code> once for standard input and
+        <code>pipe:NAME</code> for one-shot Windows IPC. Both avoid temporary files while
+        preserving content-based format detection.
       </p>
       <div class="terminal">
         <div class="terminal-bar"><span class="title">powershell</span></div>
@@ -239,8 +240,28 @@ regx undo app.undo.reg</code></pre>
 <span class="tok-prompt">&gt;</span> <span class="tok-cmd">Get-Content</span> policy.json <span class="tok-flag">-Raw</span> | regx convert - <span class="tok-flag">--from</span> json <span class="tok-flag">--redirect</span> off</code></pre>
       </div>
       <p>
-        <code>import -</code> and <code>sync -</code> require <code>-y</code> unless they are dry runs.
-        <code>validate - --fix</code> requires <code>--out</code>, because stdin cannot be rewritten.
+        A Named Pipe producer must use byte mode, write one complete registry-data document, and
+        close the pipe. regx waits up to five seconds and accepts at most 64 MiB. The native
+        <code>\\.\pipe\NAME</code> spelling is also supported.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> $producer = Start-Job {
+    $p = [IO.Pipes.NamedPipeServerStream]::new("regx-input",
+      [IO.Pipes.PipeDirection]::Out, 1, [IO.Pipes.PipeTransmissionMode]::Byte)
+    try {
+      $p.WaitForConnection()
+      $bytes = [Text.Encoding]::UTF8.GetBytes((Get-Content policy.json -Raw))
+      $p.Write($bytes, 0, $bytes.Length); $p.Flush()
+    } finally { $p.Dispose() }
+  }
+<span class="tok-prompt">&gt;</span> regx inspect pipe:regx-input <span class="tok-flag">--from</span> json <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> Wait-Job $producer | Receive-Job</code></pre>
+      </div>
+      <p>
+        Stream <code>import</code> and <code>sync</code> require <code>-y</code> unless they are
+        dry runs. <code>validate --fix</code> requires <code>--out</code>, and saved plans reject
+        streams because a closed source cannot be re-verified.
       </p>
     </section>
 

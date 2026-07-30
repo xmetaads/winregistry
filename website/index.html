@@ -117,7 +117,7 @@
         <div><dt>&lt;2 MiB</dt><dd>Single x64 executable, static CRT</dd></div>
         <div><dt>0</dt><dd>UAC prompts, ever</dd></div>
         <div><dt>0</dt><dd>Runtime dependencies</dd></div>
-        <div><dt>325</dt><dd>Automated tests, including live registry</dd></div>
+        <div><dt>330</dt><dd>Automated tests, including live registry and IPC</dd></div>
       </dl>
     </div>
   </section>
@@ -216,7 +216,7 @@
             </svg>
           </span>
           <h3>Pipeline-ready</h3>
-          <p>Distinct exit codes for parse errors, access denied, partial application and refused redirects. <code>--output json</code> everywhere, <code>--dry-run</code> on every write.</p>
+          <p>Bounded stdin and Windows Named Pipe input without temporary files. Distinct exit codes, <code>--output json</code> everywhere, and <code>--dry-run</code> on every write.</p>
         </article>
 
         <article class="card reveal">

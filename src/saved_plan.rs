@@ -54,8 +54,13 @@ pub fn save(
             destination.display()
         ));
     }
-    if sources.iter().any(|path| path.as_os_str() == "-") {
-        return Err("a saved plan requires named source files; stdin cannot be re-verified".into());
+    if sources
+        .iter()
+        .any(|path| path.as_os_str() == "-" || crate::ipc::is_named_pipe(path))
+    {
+        return Err(
+            "a saved plan requires regular source files; stream input cannot be re-verified".into(),
+        );
     }
 
     let mut source_values = Vec::new();

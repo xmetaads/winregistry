@@ -271,7 +271,8 @@ pub enum Command {
     /// .inf, .json, .csv and .ini; the format is detected per file. See
     /// `regx formats`.
     Import {
-        /// Input files. Use `-` once to read from stdin; stdin imports require -y.
+        /// Input files. Use `-` once for stdin or `pipe:NAME` for a Windows named
+        /// pipe; stream imports require -y.
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
 
@@ -354,7 +355,7 @@ pub enum Command {
     /// Read any supported format and write it out as .reg. Never touches the
     /// registry, so it is the safe way to inspect a Registry.pol or an INF.
     Convert {
-        /// Input file, or `-` for stdin.
+        /// Input file, `-` for stdin, or `pipe:NAME` for a Windows named pipe.
         #[arg(value_name = "FILE")]
         file: PathBuf,
 
@@ -385,7 +386,7 @@ pub enum Command {
     /// Each input may use any format accepted by `regx formats`; semantic
     /// losses fail closed before output.
     Merge {
-        /// Input files. Use `-` once to read one input from stdin.
+        /// Input files. Use `-` once for stdin; `pipe:NAME` reads a Windows named pipe.
         #[arg(required = true, num_args = 2.., value_name = "FILE")]
         files: Vec<PathBuf>,
 
@@ -414,7 +415,7 @@ pub enum Command {
     /// key path, so file-vs-file, file-vs-live and live-vs-live all work.
     /// The patch turns A into B: a drift report is also the fix.
     Diff {
-        /// Baseline: a file, `-` for stdin, or a key like HKCU\Software\Acme.
+        /// Baseline: a file, `-` for stdin, `pipe:NAME`, or a live registry key.
         #[arg(value_name = "A")]
         a: String,
 
@@ -469,9 +470,9 @@ pub enum Command {
         summary_only: bool,
     },
 
-    /// Search keys and values in a file, stdin, or the live registry.
+    /// Search keys and values in a file, stream, or the live registry.
     Search {
-        /// File, `-` for stdin, or a live key like HKCU\Software.
+        /// File, `-` for stdin, `pipe:NAME`, or a live key like HKCU\Software.
         #[arg(value_name = "SOURCE")]
         source: String,
 
@@ -534,7 +535,7 @@ pub enum Command {
 
     /// Resolve an import or sync into exact mutations without writing anything.
     Plan {
-        /// Input files. Use `-` once to read from stdin.
+        /// Input files. Use `-` for stdin or `pipe:NAME` for a Windows named pipe.
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
 
@@ -776,7 +777,7 @@ pub enum Command {
 
     /// Summarize keys, values, types, depth, and payload bytes without printing data.
     Stats {
-        /// File, `-` for stdin, or a live key like HKCU\Software.
+        /// File, `-` for stdin, `pipe:NAME`, or a live key like HKCU\Software.
         #[arg(value_name = "SOURCE")]
         source: String,
 
@@ -800,7 +801,7 @@ pub enum Command {
 
     /// Compute a stable SHA-256 of exact registry state without printing values.
     Fingerprint {
-        /// File, `-` for stdin, or a live key like HKCU\Software.
+        /// File, `-` for stdin, `pipe:NAME`, or a live key like HKCU\Software.
         #[arg(value_name = "SOURCE")]
         source: String,
 
@@ -897,7 +898,8 @@ pub enum Command {
 
     /// Apply an input file idempotently, optionally removing anything not declared.
     Sync {
-        /// Input file, or `-` for stdin (requires -y unless --dry-run).
+        /// Input file, `-` for stdin, or `pipe:NAME` (streams require -y unless
+        /// --dry-run).
         #[arg(value_name = "FILE")]
         file: PathBuf,
 
@@ -934,7 +936,8 @@ pub enum Command {
     /// accepts exactly one .reg input so a later file cannot leave an earlier
     /// one partially repaired.
     Validate {
-        /// Input files. Use `-` once for stdin; --fix then requires --out.
+        /// Input files. Use `-` for stdin or `pipe:NAME`; --fix on a stream
+        /// requires --out.
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
 
@@ -1051,7 +1054,7 @@ pub enum Command {
 
     /// Report the format of a file and what it contains, without applying it.
     Inspect {
-        /// Input files. Use `-` once to inspect stdin.
+        /// Input files. Use `-` for stdin or `pipe:NAME` for a Windows named pipe.
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
 

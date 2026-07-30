@@ -6,7 +6,7 @@ CRT, no installer, no runtime dependency.
 
 ```
 cargo build --release      # -> target\release\regx.exe
-cargo test                 # 325 tests, including live-registry round trips
+cargo test                 # 330 tests, including live-registry and IPC round trips
 cargo run --example generate-man -- target\man
 cargo run --release --example benchmark-large -- target\release\regx.exe 5000
 cargo test --manifest-path fuzz\Cargo.toml --test seed_corpus
@@ -198,17 +198,39 @@ Each per-view undo entry includes the planned path plus exact `bytes` and
 `sha256` after persistence. Dry-run keeps the planned entries but uses null
 evidence, for both live and offline-hive batches.
 
-File-reading commands accept `-` once for standard input, so registry data can
-be piped without a temporary file:
+File-reading commands accept bounded stream input without a temporary file:
+use `-` once for standard input, or `pipe:NAME` for a one-shot Windows named
+pipe. Both forms preserve content-based format detection.
 
 ```powershell
 Get-Content app.reg -Raw | regx inspect -
 Get-Content policy.json -Raw | regx convert - --from json --redirect off
 ```
 
-An `import -` or `sync -` requires `-y` unless it is a dry run: stdin has
-already reached EOF by the time an interactive confirmation would be needed.
-`validate - --fix` requires `--out`, because a stream cannot be rewritten.
+For direct process-to-process IPC, create a byte-mode pipe and close it after
+writing one complete document. The client waits up to five seconds and reads at
+most 64 MiB:
+
+```powershell
+$producer = Start-Job {
+  $p = [IO.Pipes.NamedPipeServerStream]::new(
+    "regx-input", [IO.Pipes.PipeDirection]::Out, 1,
+    [IO.Pipes.PipeTransmissionMode]::Byte)
+  try {
+    $p.WaitForConnection()
+    $bytes = [Text.Encoding]::UTF8.GetBytes((Get-Content policy.json -Raw))
+    $p.Write($bytes, 0, $bytes.Length)
+    $p.Flush()
+  } finally { $p.Dispose() }
+}
+regx inspect pipe:regx-input --from json --output json
+Wait-Job $producer | Receive-Job
+```
+
+The native `\\.\pipe\regx-input` spelling is also accepted. A stream
+`import` or `sync` requires `-y` unless it is a dry run. `validate --fix`
+requires `--out`, and saved plans reject streams because their source cannot be
+re-verified after it closes.
 
 `import` and `export` accept repeatable `--value GLOB` and
 `--exclude-value GLOB`; matching follows registry case-insensitivity and `@`
@@ -310,7 +332,7 @@ remote-to-local, and remote-to-remote drift checks, including `--view both`.
 value payloads. Repeatable `--include`/`--exclude` globs scope canonical paths;
 `--limit` defaults to 1,000 matching keys per view and reports truncation in
 JSON. Offline `hive ls` applies the same controls to relative hive paths.
-`stats` accepts any supported registry-data file, stdin, or a live/remote key.
+`stats` accepts any supported registry-data file, stream, or a live/remote key.
 It reports effective last-write-wins key/value counts, registry types, exact raw
 payload bytes, delete operations, maximum depth, conflicts, and completeness
 without rendering value names or data. Live `--view both` remains separated per
