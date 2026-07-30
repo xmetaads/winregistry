@@ -93,8 +93,16 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
          }}; \
          $pipe=[IO.Pipes.NamedPipeServerStream]::new(\
            '{pipe_name}',[IO.Pipes.PipeDirection]::Out,1,\
-           [IO.Pipes.PipeTransmissionMode]::Byte); \
-         try{{$pipe.WaitForConnection();$pipe.Write($bytes,0,$bytes.Length);$pipe.Flush()}}\
+           [IO.Pipes.PipeTransmissionMode]::Byte,\
+           [IO.Pipes.PipeOptions]::Asynchronous); \
+         try{{\
+           $wait=$pipe.BeginWaitForConnection($null,$null);\
+           if(-not $wait.AsyncWaitHandle.WaitOne(10000)){{\
+             throw 'regx did not connect to the integration-test pipe within 10 seconds'\
+           }};\
+           $pipe.EndWaitForConnection($wait);\
+           $pipe.Write($bytes,0,$bytes.Length);$pipe.Flush()\
+         }}\
          finally{{$pipe.Dispose()}}"
     );
     let producer = Command::new("powershell.exe")

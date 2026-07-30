@@ -22,6 +22,7 @@ jobs:
   test:
     name: Test (x64)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -152,6 +153,7 @@ jobs:
   test-standard-user:
     name: Test (standard user)
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
