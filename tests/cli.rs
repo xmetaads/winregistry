@@ -12,6 +12,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 // Exit codes, mirrored from src/cli.rs. Duplicated on purpose: if someone
 // changes the constant, this file should fail rather than silently agree.
@@ -81,6 +82,9 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
         std::process::id(),
         NEXT_PIPE.fetch_add(1, Ordering::Relaxed)
     );
+    let ready_path = std::env::temp_dir().join(format!("{pipe_name}.ready"));
+    let _ = std::fs::remove_file(&ready_path);
+    let ready_ps = ready_path.to_string_lossy().replace('\'', "''");
     let hex: String = input
         .as_bytes()
         .iter()
@@ -96,6 +100,7 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
            [IO.Pipes.PipeTransmissionMode]::Byte,\
            [IO.Pipes.PipeOptions]::Asynchronous); \
          try{{\
+           [IO.File]::WriteAllText('{ready_ps}','ready');\
            $wait=$pipe.BeginWaitForConnection($null,$null);\
            if(-not $wait.AsyncWaitHandle.WaitOne(10000)){{\
              throw 'regx did not connect to the integration-test pipe within 10 seconds'\
@@ -105,12 +110,40 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
          }}\
          finally{{$pipe.Dispose()}}"
     );
-    let producer = Command::new("powershell.exe")
+    let mut producer = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to launch named-pipe producer");
+
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    while !ready_path.exists() {
+        if let Some(status) = producer
+            .try_wait()
+            .expect("failed to poll named-pipe producer")
+        {
+            let producer_output = producer
+                .wait_with_output()
+                .expect("failed to collect named-pipe producer output");
+            panic!(
+                "named-pipe producer exited before becoming ready ({status}): {}",
+                String::from_utf8_lossy(&producer_output.stderr)
+            );
+        }
+        if Instant::now() >= ready_deadline {
+            let _ = producer.kill();
+            let producer_output = producer
+                .wait_with_output()
+                .expect("failed to collect timed-out named-pipe producer");
+            panic!(
+                "named-pipe producer did not become ready within 15 seconds: {}",
+                String::from_utf8_lossy(&producer_output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_file(&ready_path);
 
     let source = format!("pipe:{pipe_name}");
     let expanded: Vec<&str> = args

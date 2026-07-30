@@ -640,7 +640,9 @@ artifacts.
 
 - The Windows Named Pipe integration-test producer now uses asynchronous
   connection waiting with a hard 10-second deadline instead of an unbounded
-  `WaitForConnection`. CI also caps x64 and standard-user jobs at 30 and 15
+  `WaitForConnection`, and publishes a bounded readiness handshake before the
+  client starts so a cold PowerShell launch cannot consume regx's five-second
+  connection window. CI also caps x64 and standard-user jobs at 30 and 15
   minutes, so a failed client or runner cannot leave the workflow hanging for
   hours.
 - The executable-output schema harness now evaluates `allOf`,
