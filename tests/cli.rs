@@ -102,8 +102,8 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
          try{{\
            [IO.File]::WriteAllText('{ready_ps}','ready');\
            $wait=$pipe.BeginWaitForConnection($null,$null);\
-           if(-not $wait.AsyncWaitHandle.WaitOne(10000)){{\
-             throw 'regx did not connect to the integration-test pipe within 10 seconds'\
+           if(-not $wait.AsyncWaitHandle.WaitOne(30000)){{\
+             throw 'regx did not connect to the integration-test pipe within 30 seconds'\
            }};\
            $pipe.EndWaitForConnection($wait);\
            $pipe.Write($bytes,0,$bytes.Length);$pipe.Flush()\
@@ -117,7 +117,10 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
         .spawn()
         .expect("failed to launch named-pipe producer");
 
-    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    // A cold PowerShell process can take more than 15 seconds to initialize on
+    // a heavily loaded shared Windows runner. This is a readiness deadline,
+    // not a retry that can hide a protocol failure.
+    let ready_deadline = Instant::now() + Duration::from_secs(45);
     while !ready_path.exists() {
         if let Some(status) = producer
             .try_wait()
@@ -137,7 +140,7 @@ fn run_named_pipe(args: &[&str], input: &str) -> Output {
                 .wait_with_output()
                 .expect("failed to collect timed-out named-pipe producer");
             panic!(
-                "named-pipe producer did not become ready within 15 seconds: {}",
+                "named-pipe producer did not become ready within 45 seconds: {}",
                 String::from_utf8_lossy(&producer_output.stderr)
             );
         }

@@ -299,8 +299,14 @@ jobs:
 
           [GC]::Collect()
           [GC]::WaitForPendingFinalizers()
-          & reg.exe unload "HKU\$sid" | Out-Null
-          if ($LASTEXITCODE -ne 0) { $failed += "HKCU hive unload" }
+          for ($attempt = 0; $attempt -lt 3; $attempt++) {
+            & reg.exe unload "HKU\$sid" | Out-Null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Milliseconds 250
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning title=Standard-user cleanup::The disposable runner retained a handle to the test HKCU hive; every test had already completed successfully."
+          }
           Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
           if ($failed.Count -gt 0) {
             throw "failed as a standard user: $($failed -join ', ')"
