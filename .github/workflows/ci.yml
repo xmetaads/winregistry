@@ -203,6 +203,28 @@ jobs:
           Add-LocalGroupMember -Group "Users" -Member $user
           "created $user, member of: $((Get-LocalUser $user | Get-LocalGroupMember -ErrorAction SilentlyContinue).Name -join ', ')"
 
+          # A newly created local account has no profile until its first real
+          # logon. Create it explicitly so HKCU and Windows Known Folder APIs
+          # are valid under the same non-admin token used by the test process.
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class RegxUserProfile {
+              [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+              public static extern int CreateProfile(
+                  string sid, string userName, StringBuilder profilePath, uint pathLength);
+          }
+          "@
+          $sid = (Get-LocalUser $user).SID.Value
+          $profilePath = [Text.StringBuilder]::new(32768)
+          $profileResult = [RegxUserProfile]::CreateProfile(
+              $sid, $user, $profilePath, [uint32]$profilePath.Capacity)
+          if ($profileResult -ne 0) {
+            throw "CreateProfile failed for $user with HRESULT 0x$('{0:X8}' -f [uint32]$profileResult)"
+          }
+          "created profile: $profilePath"
+
           # The account needs to read the workspace and write its own temp.
           & icacls "${env:GITHUB_WORKSPACE}" /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
           $scratch = Join-Path $env:RUNNER_TEMP "regxtest"
