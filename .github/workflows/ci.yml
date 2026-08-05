@@ -213,15 +213,19 @@ jobs:
           public static class RegxUserProfile {
               [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
               public static extern int CreateProfile(
-                  string sid, string userName, StringBuilder profilePath, uint pathLength);
+                  string sid, string userName, [Out] StringBuilder profilePath, uint pathLength);
           }
           "@
           $sid = (Get-LocalUser $user).SID.Value
-          $profilePath = [Text.StringBuilder]::new(32768)
+          # CreateProfile is a legacy MAX_PATH API even though Known Folders
+          # themselves return a CoTaskMem-allocated path.
+          $profilePath = [Text.StringBuilder]::new(260)
           $profileResult = [RegxUserProfile]::CreateProfile(
               $sid, $user, $profilePath, [uint32]$profilePath.Capacity)
           if ($profileResult -ne 0) {
-            throw "CreateProfile failed for $user with HRESULT 0x$('{0:X8}' -f [uint32]$profileResult)"
+            $profileCode = [BitConverter]::ToUInt32(
+                [BitConverter]::GetBytes([int32]$profileResult), 0)
+            throw "CreateProfile failed for $user with HRESULT 0x$('{0:X8}' -f $profileCode)"
           }
           "created profile: $profilePath"
 
