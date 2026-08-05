@@ -306,6 +306,7 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning title=Standard-user cleanup::The disposable runner retained a handle to the test HKCU hive; every test had already completed successfully."
+            $global:LASTEXITCODE = 0
           }
           Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
           if ($failed.Count -gt 0) {
