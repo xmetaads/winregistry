@@ -211,11 +211,13 @@ jobs:
 
           $cred = New-Object System.Management.Automation.PSCredential($user, $secure)
 
-          # Start-Process does not load the target account's profile, so the
+          # Without -LoadUserProfile, the child would not load the account and
           # child inherits this process's TEMP — which belongs to the runner's
           # administrator and is not writable by an unprivileged account. The
           # suites create scratch directories under TEMP, so point it at the
           # one that was just granted to the account.
+          # Known Folder APIs and HKCU require the target account's real profile.
+          # Keep TEMP isolated even after loading it below.
           $env:TEMP = $scratch
           $env:TMP = $scratch
 
@@ -234,6 +236,7 @@ jobs:
             $p = Start-Process -FilePath $t.FullName `
                 -ArgumentList "--nocapture" `
                 -Credential $cred `
+                -LoadUserProfile `
                 -WorkingDirectory $scratch `
                 -RedirectStandardOutput $out `
                 -RedirectStandardError $err `
