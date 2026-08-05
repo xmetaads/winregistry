@@ -32,7 +32,7 @@ does not by itself mean the product is complete.
 - Latest GitHub CI on commit `70ef0bb` completed successfully in 4m40s. Its
   x64, standard-user, signing rehearsal, ARM64, supply-chain, and site-check
   jobs all passed, and it produced both architecture artifacts.
-- The application has 34 top-level commands and eight text/policy input
+- The application has 35 top-level commands and eight text/policy input
   formats, plus offline hive detection.
 - `discover` now exposes its complete provenance in strict JSON: resolved
   executable/anchor, enabled discovery controls, notes, the full absent probe

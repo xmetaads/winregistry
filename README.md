@@ -6,7 +6,7 @@ CRT, no installer, no runtime dependency.
 
 ```
 cargo build --release      # -> target\release\regx.exe
-cargo test                 # 330 tests, including live-registry and IPC round trips
+cargo test                 # 344 tests, including live-registry, IPC, and native Shell round trips
 cargo run --example generate-man -- target\man
 cargo run --release --example benchmark-large -- target\release\regx.exe 5000
 cargo test --manifest-path fuzz\Cargo.toml --test seed_corpus
@@ -53,6 +53,7 @@ used only when designing site pages. Reinstall it with
 | `apply-plan <PLAN>` | Apply a saved plan only while source bytes and live state still match |
 | `batch <MANIFEST>` | Apply a versioned multi-operation manifest atomically with per-operation outcomes |
 | `audit <FILE>` | Verify that an audit log has not been edited or had records removed |
+| `lnk <OP>` | Resolve Windows Known Folders and create, inspect, delete, or manifest-apply native `.lnk` shortcuts |
 | `formats` | List the input formats and how each is detected |
 | `completions <SHELL>` | Generate Bash, Elvish, Fish, PowerShell or Zsh completion on stdout |
 | `merge <FILE...>` | Combine any supported formats to `.reg`, JSON, CSV, or Registry.pol; optionally fail on conflicting assignments |
@@ -231,6 +232,60 @@ The native `\\.\pipe\regx-input` spelling is also accepted. A stream
 `import` or `sync` requires `-y` unless it is a dry run. `validate --fix`
 requires `--out`, and saved plans reject streams because their source cannot be
 re-verified after it closes.
+
+### Windows Shell Known Folders and native shortcuts
+
+Path-bearing CLI arguments and shortcut manifests recognize
+`shell:Startup`, `shell:Desktop`, and `shell:Programs`. regx resolves each token
+with `SHGetKnownFolderPath` (and the documented `SHGetFolderPathW` fallback),
+not an environment-variable guess or an external shell.
+
+```powershell
+regx lnk create `
+  --target "C:\Program Files\Acme\Acme.exe" `
+  --output "shell:Startup\Acme.lnk" `
+  --workdir "C:\Program Files\Acme" `
+  --args=--background `
+  --icon "C:\Program Files\Acme\Acme.exe,0" `
+  --style hidden `
+  -y
+
+regx lnk inspect "shell:Startup\Acme.lnk" --output json
+regx lnk delete "shell:Startup\Acme.lnk" --dry-run
+```
+
+Creation is implemented with `CoCreateInstance(CLSID_ShellLink)`,
+`IShellLinkW`, and `IPersistFile`; the product never calls PowerShell or
+`WScript.Shell`. It writes to a temporary `.lnk`, reads every field back through
+COM, verifies it, and commits atomically. `hidden` and `minimized` both request
+`SW_SHOWMINNOACTIVE`; they affect initial window presentation, not whether the
+entry is visible in Startup management tools.
+
+`lnk apply FILE` accepts repeatable `[SHORTCUT]` and `[DELETE_SHORTCUT]`
+blocks from UTF-8/UTF-16 files, stdin (`-`), or a Windows named pipe. It
+preflights the complete manifest, rejects duplicate destinations, confirms
+once, and restores every earlier shortcut if a later action fails. Shortcut
+mutations support `--dry-run`, `-y`, JSON output, and tamper-evident audit
+records with exact before/after SHA-256 values.
+
+```ini
+[SHORTCUT]
+Target=C:\Program Files\Acme\Acme.exe
+Output=shell:Startup\Acme.lnk
+WorkingDirectory=C:\Program Files\Acme
+Arguments=--background
+Description=Acme background client
+Icon=C:\Program Files\Acme\Acme.exe,0
+Style=hidden
+
+[DELETE_SHORTCUT]
+Path=shell:Desktop\Old Acme.lnk
+```
+
+Machine consumers can use the
+[shortcut result schema](https://winregistry.org/schemas/shortcut-result-v1.json),
+[capability inventory](https://winregistry.org/capabilities.json), and
+[AI-agent summary](https://winregistry.org/llms.txt).
 
 `import` and `export` accept repeatable `--value GLOB` and
 `--exclude-value GLOB`; matching follows registry case-insensitivity and `@`
@@ -575,7 +630,7 @@ restricts `regx` only; it is not an ACL and does not constrain other tools.
 
 ```
 $ regx --version
-regx 0.2.0
+regx 0.3.0
 commit:  2e212936c6af
 date:    2026-07-28T03:59:11+07:00
 target:  x86_64-pc-windows-msvc
@@ -596,8 +651,8 @@ cases, before creating a tag:
 ```bash
 python scripts/check_release_identity.py --self-test
 python scripts/check_release_assets.py --self-test
-python scripts/check_release_identity.py v0.2.0 --require-git-tag
-python scripts/check_release_assets.py dist v0.2.0
+python scripts/check_release_identity.py v0.3.0 --require-git-tag
+python scripts/check_release_assets.py dist v0.3.0
 ```
 
 The identity check requires the exact tag at `HEAD`, the same Cargo version, a

@@ -49,7 +49,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
-fn create_temporary(path: &Path) -> std::io::Result<(File, PathBuf)> {
+pub(crate) fn create_temporary(path: &Path) -> std::io::Result<(File, PathBuf)> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -81,7 +81,7 @@ fn create_temporary(path: &Path) -> std::io::Result<(File, PathBuf)> {
 }
 
 #[cfg(windows)]
-fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "kernel32")]
@@ -114,7 +114,7 @@ fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(source, destination)
 }
 

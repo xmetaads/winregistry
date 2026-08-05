@@ -73,6 +73,10 @@ fn cli_schema_catalog_covers_every_machine_readable_command() {
         "hive move-value",
         "import",
         "inspect",
+        "lnk apply",
+        "lnk create",
+        "lnk delete",
+        "lnk inspect",
         "ls",
         "move",
         "move-value",
@@ -500,6 +504,42 @@ fn representative_real_cli_outputs_validate_against_the_catalog() {
     )
     .unwrap_or_else(|error| panic!("registryData: {error}\n{registry_data}"));
 
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn real_shortcut_output_validates_against_the_published_contract() {
+    let schema: Value =
+        serde_json::from_slice(&std::fs::read(root().join("shortcut-result-v1.json")).unwrap())
+            .unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_regx"));
+    let scratch = std::env::temp_dir().join(format!(
+        "regx-shortcut-schema-contract-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let link = scratch.join("Agent contract.lnk");
+    let link_arg = link.to_string_lossy().into_owned();
+    let binary_arg = binary.to_string_lossy().into_owned();
+    let output = Command::new(&binary)
+        .args([
+            "lnk",
+            "create",
+            "--target",
+            &binary_arg,
+            "--output",
+            &link_arg,
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let instance: Value = serde_json::from_slice(&output.stdout).unwrap();
+    validate(&instance, &schema, &schema)
+        .unwrap_or_else(|error| panic!("lnk create: {error}\n{instance}"));
+    assert!(!link.exists(), "dry-run created a shortcut");
     std::fs::remove_dir_all(scratch).unwrap();
 }
 

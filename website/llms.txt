@@ -1,0 +1,18 @@
+# WinRegistry / regx
+
+> regx is an MIT-licensed, asInvoker Windows Registry and Shell automation CLI.
+
+Canonical source: https://github.com/xmetaads/winregistry
+Documentation: https://www.winregistry.org/docs
+Machine-readable capabilities: https://www.winregistry.org/capabilities.json
+CLI JSON Schema catalog: https://www.winregistry.org/schemas/cli-output-v1.json
+Native shortcut result schema: https://www.winregistry.org/schemas/shortcut-result-v1.json
+
+## Native Windows shortcut capability
+
+- Resolve shell:Startup, shell:Desktop, and shell:Programs with SHGetKnownFolderPath.
+- Create and inspect .lnk files with IShellLinkW and IPersistFile.
+- Delete only parseable .lnk files.
+- Apply [SHORTCUT] and [DELETE_SHORTCUT] manifests from files, stdin, or Windows named pipes.
+- No PowerShell or WScript.Shell is used by the product implementation.
+- Mutations support confirmation, -y, --dry-run, JSON output, tamper-evident audit records, atomic file replacement, read-back verification, and batch rollback.

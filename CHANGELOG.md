@@ -14,7 +14,8 @@ major version bump:
   `5` partial, `6` redirection refused, `7` I/O, `8` not found.
 - **`--output json` shapes** for `query`, `probe`, `permissions`, `diff`,
   `inspect`, `discover`, `search`, `stats`, `fingerprint`, `watch`, `plan`,
-  `copy`, `move`, `formats`,
+  `copy`, `move`, `formats`, `lnk create`, `lnk inspect`, `lnk delete`,
+  `lnk apply`,
   `apply-plan`, `apply-copy-plan`, `batch`, offline-hive operations and
   `--self-check`.
 - **Command and flag names**, and the meaning of `--dry-run`: it performs every
@@ -24,6 +25,28 @@ major version bump:
 
 Human-readable stdout and stderr text is *not* part of the contract. Parse the
 JSON.
+
+## [0.3.0] - 2026-08-05
+
+### Added
+
+- Native Windows Shell Known Folder resolution for `shell:Startup`,
+  `shell:Desktop`, and `shell:Programs` in path-bearing CLI arguments and
+  shortcut manifests. Resolution uses `SHGetKnownFolderPath`, with
+  `SHGetFolderPathW` as the compatibility fallback; no shell or environment
+  script is invoked.
+- `lnk create`, `lnk inspect`, and `lnk delete` implement Unicode Windows Shell
+  Links through `IShellLinkW` and `IPersistFile`. Target, arguments, working
+  directory, description, icon path/index, and normal/hidden/minimized show
+  styles round-trip through native COM before an atomic commit.
+- `lnk apply` parses repeated `[SHORTCUT]` and `[DELETE_SHORTCUT]` blocks from
+  UTF-8/UTF-16 files, stdin, or Windows named pipes. It preflights the complete
+  manifest, rejects duplicate destinations, confirms once, and rolls back
+  earlier changes if a later action fails.
+- Shortcut writes support `--dry-run`, `-y`, JSON output, and tamper-evident
+  audit events with exact artifact SHA-256 evidence. Public JSON Schema,
+  `capabilities.json`, and `llms.txt` make the feature contract discoverable by
+  individuals, enterprises, and AI agents.
 
 ## [0.2.0] - 2026-07-30
 

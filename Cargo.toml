@@ -1,9 +1,9 @@
 [package]
 name = "regx"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.94.1"
-description = "Portable, non-admin Windows Registry CLI"
+description = "Portable, non-admin Windows Registry and Shell automation CLI"
 license = "MIT"
 repository = "https://github.com/xmetaads/winregistry"
 homepage = "https://www.winregistry.org"

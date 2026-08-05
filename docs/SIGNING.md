@@ -151,8 +151,8 @@ countersign a certificate it has never seen, and the release workflow does pass
 
 ```powershell
 # Maintainer preflight: exact inventory, hashes, PE machines, manifests and SBOM.
-python scripts/check_release_identity.py v0.2.0 --require-git-tag
-python scripts/check_release_assets.py dist v0.2.0
+python scripts/check_release_identity.py v0.3.0 --require-git-tag
+python scripts/check_release_assets.py dist v0.3.0
 
 # Integrity: does this file match what was published?
 (Get-FileHash regx-x86_64.exe -Algorithm SHA256).Hash.ToLower()

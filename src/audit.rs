@@ -65,6 +65,30 @@ pub enum Op {
     ValueDelete,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArtifactOp {
+    ShortcutCreate,
+    ShortcutDelete,
+}
+
+impl ArtifactOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ShortcutCreate => "shortcut.create",
+            Self::ShortcutDelete => "shortcut.delete",
+        }
+    }
+}
+
+pub struct ArtifactEvent<'a> {
+    pub op: ArtifactOp,
+    pub path: &'a Path,
+    pub before_sha256: Option<&'a str>,
+    pub after_sha256: Option<&'a str>,
+    pub outcome: Outcome,
+    pub detail: Option<&'a str>,
+}
+
 impl Op {
     fn as_str(self) -> &'static str {
         match self {
@@ -161,6 +185,29 @@ impl Logger {
         // but it must not pass unnoticed either.
         if let Err(e) = self.write(fields) {
             eprintln!("regx: audit log write failed: {e}");
+        }
+    }
+
+    /// Record a filesystem artifact mutation without placing its contents in
+    /// the audit log. Exact before/after SHA-256 values keep the operation
+    /// independently verifiable.
+    pub fn record_artifact(&mut self, e: ArtifactEvent<'_>) {
+        let mut fields = vec![
+            ("event".to_string(), jstr(e.op.as_str())),
+            ("path".to_string(), jstr(&e.path.display().to_string())),
+            ("outcome".to_string(), jstr(e.outcome.as_str())),
+        ];
+        if let Some(digest) = e.before_sha256 {
+            fields.push(("beforeSha256".into(), jstr(digest)));
+        }
+        if let Some(digest) = e.after_sha256 {
+            fields.push(("afterSha256".into(), jstr(digest)));
+        }
+        if let Some(detail) = e.detail {
+            fields.push(("detail".into(), jstr(detail)));
+        }
+        if let Err(error) = self.write(fields) {
+            eprintln!("regx: audit log write failed: {error}");
         }
     }
 
@@ -786,7 +833,7 @@ fn redact_command(command: &str, redact: bool) -> String {
             elide_next = false;
             continue;
         }
-        if token == "-d" || token == "--data" {
+        if token == "-d" || token == "--data" || token == "--args" {
             out.push(token.to_string());
             elide_next = true;
             continue;
@@ -794,8 +841,11 @@ fn redact_command(command: &str, redact: bool) -> String {
         if let Some(v) = token
             .strip_prefix("--data=")
             .or_else(|| token.strip_prefix("-d="))
+            .or_else(|| token.strip_prefix("--args="))
         {
-            let flag = if token.starts_with("--") {
+            let flag = if token.starts_with("--args") {
+                "--args"
+            } else if token.starts_with("--") {
                 "--data"
             } else {
                 "-d"
@@ -1331,6 +1381,12 @@ mod tests {
             redact_command("regx set K -d hunter2", false),
             "regx set K -d hunter2"
         );
+        let shortcut = redact_command("regx lnk create --args secret-token --output a.lnk", true);
+        assert!(!shortcut.contains("secret-token"));
+        assert!(shortcut.contains("--args <redacted:"));
+        let shortcut_equals = redact_command("regx lnk create --args=secret-token", true);
+        assert!(!shortcut_equals.contains("secret-token"));
+        assert!(shortcut_equals.contains("--args=<redacted:"));
         // The same input always yields the same placeholder, so two runs can
         // still be compared.
         assert_eq!(digest_placeholder("x"), digest_placeholder("x"));

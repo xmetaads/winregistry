@@ -25,10 +25,11 @@ pub const LONG_VERSION: &str = concat!(
     name = "regx",
     version,
     long_version = LONG_VERSION,
-    about = "Portable, non-admin Windows Registry CLI",
-    long_about = "regx reads, converts and merges .reg files offline and applies them to \
-                  HKEY_CURRENT_USER live. It never requests elevation: the executable is \
-                  manifested asInvoker, so it never raises a UAC prompt.",
+    about = "Portable, non-admin Windows Registry and Shell automation CLI",
+    long_about = "regx reads, converts and merges registry data, applies it to \
+                  HKEY_CURRENT_USER, resolves Windows Shell Known Folders, and manages native \
+                  .lnk shortcuts. It never requests elevation: the executable is manifested \
+                  asInvoker, so it never raises a UAC prompt.",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -86,6 +87,16 @@ pub struct GlobalOpts {
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, ValueEnum)]
+pub enum ShortcutStyle {
+    /// Open the target normally.
+    Normal,
+    /// Start minimized without activating a popup window.
+    Hidden,
+    /// Start minimized without activating a popup window.
+    Minimized,
 }
 
 /// Registry-data serialization used by `convert`.
@@ -265,6 +276,16 @@ pub struct DiffValueFilterOpts {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Create, inspect, delete, or batch-apply native Windows Shell shortcuts.
+    ///
+    /// Path-bearing fields resolve shell:Startup, shell:Desktop, and
+    /// shell:Programs through SHGetKnownFolderPath. Shortcut files are handled
+    /// through IShellLinkW/IPersistFile; no external shell is invoked.
+    Lnk {
+        #[command(subcommand)]
+        op: LnkOp,
+    },
+
     /// Merge one or more input files into the live registry.
     ///
     /// Accepts .reg, Registry.pol, ADMX/ADML, Group Policy Preferences XML,
@@ -1081,6 +1102,66 @@ pub enum Command {
         /// Hold the hive exclusively for this process (REG_PROCESS_APPKEY).
         #[arg(long, global = true)]
         exclusive: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LnkOp {
+    /// Create or replace a native `.lnk` shortcut.
+    Create {
+        /// Existing executable or file launched by the shortcut.
+        #[arg(long, value_name = "FILE")]
+        target: PathBuf,
+
+        /// Destination `.lnk`, including shell:Startup/Desktop/Programs paths.
+        #[arg(
+            id = "lnk_output",
+            long = "shortcut-output",
+            short = 'o',
+            value_name = "FILE"
+        )]
+        output: PathBuf,
+
+        /// Existing working directory for the launched target.
+        #[arg(long, value_name = "DIR")]
+        workdir: Option<PathBuf>,
+
+        /// Arguments passed directly to the target (never through a shell).
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        args: Option<String>,
+
+        /// Shortcut description visible in Windows Shell properties.
+        #[arg(long, value_name = "TEXT")]
+        description: Option<String>,
+
+        /// Icon as PATH or PATH,INDEX.
+        #[arg(long, value_name = "PATH[,INDEX]")]
+        icon: Option<String>,
+
+        /// Window presentation requested from Windows Shell.
+        #[arg(long, value_enum, default_value_t = ShortcutStyle::Normal)]
+        style: ShortcutStyle,
+    },
+
+    /// Inspect a native `.lnk` without launching it.
+    Inspect {
+        /// Shortcut path, including a supported shell: Known Folder token.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+
+    /// Delete a native `.lnk` after parsing and confirming it.
+    Delete {
+        /// Shortcut path, including a supported shell: Known Folder token.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+
+    /// Apply [SHORTCUT] and [DELETE_SHORTCUT] blocks from a manifest.
+    Apply {
+        /// UTF-8/UTF-16 manifest, `-` for stdin, or `pipe:NAME` for Windows IPC.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
     },
 }
 

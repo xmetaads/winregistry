@@ -46,7 +46,7 @@ have the CLI.
       standard 1.91:1 social-preview ratio and is referenced by Open Graph and
       Twitter metadata.
 - [ ] Confirm the broad figures still match the shipped binary and test suite:
-      the hero says &lt;2 MiB and 330 tests; update both from measured release
+      the hero says &lt;2 MiB and 344 tests; update both from measured release
       output and the test inventory before shipping.
 - [ ] Run `python scripts/check_deployed_site.py` after deployment. It requires
       the live HTML, CSS, scripts, social image, security headers, clean-URL

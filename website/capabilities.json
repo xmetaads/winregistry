@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "product": "regx",
+  "project": "WinRegistry",
+  "version": "0.3.0",
+  "license": "MIT",
+  "platform": "Windows x86_64 and ARM64",
+  "source": "https://github.com/xmetaads/winregistry",
+  "documentation": "https://www.winregistry.org/docs",
+  "runtime": {
+    "elevationManifest": "asInvoker",
+    "requestsElevation": false,
+    "externalShellRequired": false
+  },
+  "knownFolderResolution": {
+    "api": "SHGetKnownFolderPath",
+    "fallback": "SHGetFolderPathW",
+    "tokens": {
+      "shell:Startup": "FOLDERID_Startup",
+      "shell:Desktop": "FOLDERID_Desktop",
+      "shell:Programs": "FOLDERID_Programs"
+    },
+    "appliesTo": ["CLI path arguments", "shortcut fields", "stdin manifests", "Windows named-pipe manifests"]
+  },
+  "nativeShortcuts": {
+    "interfaces": ["IShellLinkW", "IPersistFile"],
+    "commands": ["lnk create", "lnk inspect", "lnk delete", "lnk apply"],
+    "manifestBlocks": ["SHORTCUT", "DELETE_SHORTCUT"],
+    "fields": ["Target", "Output", "WorkingDirectory", "Arguments", "Description", "Icon", "Style"],
+    "styles": ["normal", "hidden", "minimized"],
+    "externalImplementationsNotUsed": ["PowerShell", "WScript.Shell"]
+  },
+  "safety": {
+    "confirmationBeforeMutation": true,
+    "dryRun": true,
+    "tamperEvidentAudit": true,
+    "atomicShortcutWrite": true,
+    "readBackVerification": true,
+    "manifestRollback": true,
+    "streamMutationRequiresYes": true
+  },
+  "schemas": {
+    "cli": "https://www.winregistry.org/schemas/cli-output-v1.json",
+    "shortcut": "https://www.winregistry.org/schemas/shortcut-result-v1.json"
+  }
+}

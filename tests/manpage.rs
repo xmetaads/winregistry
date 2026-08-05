@@ -41,14 +41,14 @@ fn assert_generated_manual() {
 
     let root = std::fs::read_to_string(scratch.0.join("regx.1")).expect("root manual");
     assert!(root.contains(".TH regx 1"));
-    assert!(root.contains("Portable, non\\-admin Windows Registry CLI"));
+    assert!(root.contains("Portable, non\\-admin Windows Registry and Shell automation CLI"));
 
     let command = cli::Cli::command();
     let subcommands: Vec<_> = command
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_owned())
         .collect();
-    assert_eq!(subcommands.len(), 34, "top-level command inventory drifted");
+    assert_eq!(subcommands.len(), 35, "top-level command inventory drifted");
 
     for name in subcommands {
         let file = scratch.0.join(format!("regx-{name}.1"));

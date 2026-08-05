@@ -146,7 +146,7 @@ home = (SITE / "index.html").read_text(encoding="utf-8")
 site_notes = (SITE / "README.md").read_text(encoding="utf-8")
 test_count = re.search(r"cargo test\s+#\s+([0-9]+) tests", readme)
 home_count = re.search(
-    r"<dt>([0-9]+)</dt><dd>Automated tests, including live registry(?: and IPC)?</dd>",
+    r"<dt>([0-9]+)</dt><dd>Automated tests, including native Shell and IPC</dd>",
     home,
 )
 notes_count = re.search(r"hero says &lt;2 MiB and ([0-9]+) tests", site_notes)
@@ -163,7 +163,7 @@ else:
 
 release_truth = {
     "index.html": [
-        "v0.2 source",
+        "v0.3 source",
         "&lt;2 MiB",
         "The first binary release is pending",
         "Windows 10 / Server 2016 or later",

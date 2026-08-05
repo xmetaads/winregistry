@@ -21,6 +21,9 @@ mod saved_plan;
 mod search;
 mod selfcheck;
 mod sha256;
+mod shell;
+mod shortcut;
+mod shortcut_manifest;
 mod signature;
 mod undo;
 mod value;
@@ -31,8 +34,8 @@ mod xml;
 use anyhow::{anyhow, Context};
 use clap::{CommandFactory as _, Parser as _};
 use cli::{
-    exit, Cli, Command, CompletionShell, DataFormat, GlobalOpts, HiveOp, LogLevel, MinConfidence,
-    OnRefuse, OutputFormat, RedirectMode, RedirectOpts,
+    exit, Cli, Command, CompletionShell, DataFormat, GlobalOpts, HiveOp, LnkOp, LogLevel,
+    MinConfidence, OnRefuse, OutputFormat, RedirectMode, RedirectOpts, ShortcutStyle,
 };
 use engine::Roots;
 use model::*;
@@ -97,7 +100,15 @@ fn coded(code: i32, message: impl Into<String>) -> anyhow::Error {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let args = normalize_lnk_output_args(std::env::args_os());
+    let args = match resolve_shell_cli_args(args) {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("regx: {error}");
+            return ExitCode::from(exit::USAGE as u8);
+        }
+    };
+    let cli = Cli::parse_from(args);
     let code = match run(&cli) {
         Ok(c) => c,
         Err(e) => {
@@ -112,6 +123,73 @@ fn main() -> ExitCode {
         }
     };
     ExitCode::from(code as u8)
+}
+
+fn resolve_shell_cli_args(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<Vec<std::ffi::OsString>, String> {
+    args.into_iter()
+        .map(|argument| {
+            let Some(text) = argument.to_str() else {
+                return Ok(argument);
+            };
+            if text
+                .as_bytes()
+                .windows(6)
+                .any(|window| window.eq_ignore_ascii_case(b"shell:"))
+            {
+                shell::resolve_text(text).map(std::ffi::OsString::from)
+            } else {
+                Ok(argument)
+            }
+        })
+        .collect()
+}
+
+/// Preserve the long-established global `--output json|text` while also
+/// supporting the requested `lnk create --output FILE` spelling. Clap cannot
+/// attach the same long option to a global and a nested argument, so only a
+/// non-format value in the `lnk create` context is rewritten to the internal
+/// unambiguous option name.
+fn normalize_lnk_output_args(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(args.len());
+    let mut saw_lnk = false;
+    let mut saw_create = false;
+    let mut index = 0_usize;
+    while index < args.len() {
+        let text = args[index].to_string_lossy();
+        if text.eq_ignore_ascii_case("lnk") {
+            saw_lnk = true;
+        } else if saw_lnk && text.eq_ignore_ascii_case("create") {
+            saw_create = true;
+        }
+
+        if saw_create && text == "--output" {
+            if let Some(value) = args.get(index + 1) {
+                let value_text = value.to_string_lossy();
+                if !matches!(value_text.as_ref(), "json" | "text") {
+                    output.push("--shortcut-output".into());
+                    output.push(value.clone());
+                    index += 2;
+                    continue;
+                }
+            }
+        } else if saw_create {
+            if let Some(value) = text.strip_prefix("--output=") {
+                if !matches!(value, "json" | "text") {
+                    output.push(format!("--shortcut-output={value}").into());
+                    index += 1;
+                    continue;
+                }
+            }
+        }
+        output.push(args[index].clone());
+        index += 1;
+    }
+    output
 }
 
 fn run(cli: &Cli) -> anyhow::Result<i32> {
@@ -158,6 +236,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         return Ok(exit::USAGE);
     };
     match command {
+        Command::Lnk { op } => cmd_lnk(cli, &policy, op),
         Command::Validate {
             files,
             strict,
@@ -1054,6 +1133,446 @@ fn confirm(g: &GlobalOpts, policy: &policy::Policy, prompt: &str) -> bool {
         return false;
     }
     matches!(line.trim(), "y" | "Y" | "yes" | "YES")
+}
+
+// ---------------------------------------------------------------------------
+// Windows Shell Known Folders and native shortcuts
+// ---------------------------------------------------------------------------
+
+fn cmd_lnk(cli: &Cli, policy: &policy::Policy, op: &LnkOp) -> anyhow::Result<i32> {
+    match op {
+        LnkOp::Create {
+            target,
+            output,
+            workdir,
+            args,
+            description,
+            icon,
+            style,
+        } => {
+            let (icon_path, icon_index) = match icon {
+                Some(spec) => {
+                    let (path, index) = shortcut::parse_icon_spec(spec).map_err(usage)?;
+                    (Some(path), index)
+                }
+                None => (None, 0),
+            };
+            let requested = shortcut::CreateOptions {
+                target: target.clone(),
+                output: output.clone(),
+                working_directory: workdir.clone(),
+                arguments: args.clone(),
+                description: description.clone(),
+                icon_path,
+                icon_index,
+                style: cli_shortcut_style(*style),
+            };
+            cmd_lnk_create(cli, policy, &requested)
+        }
+        LnkOp::Inspect { file } => {
+            let info = shortcut::inspect(file).map_err(|error| anyhow!(error))?;
+            print_link_info(cli, "inspect", &info, false, false, None);
+            Ok(exit::OK)
+        }
+        LnkOp::Delete { file } => cmd_lnk_delete(cli, policy, file),
+        LnkOp::Apply { file } => cmd_lnk_apply(cli, policy, file),
+    }
+}
+
+fn cli_shortcut_style(style: ShortcutStyle) -> shortcut::ShowStyle {
+    match style {
+        ShortcutStyle::Normal => shortcut::ShowStyle::Normal,
+        ShortcutStyle::Hidden => shortcut::ShowStyle::Hidden,
+        ShortcutStyle::Minimized => shortcut::ShowStyle::Minimized,
+    }
+}
+
+fn cmd_lnk_create(
+    cli: &Cli,
+    policy: &policy::Policy,
+    requested: &shortcut::CreateOptions,
+) -> anyhow::Result<i32> {
+    let options = shortcut::resolve_options(requested).map_err(usage)?;
+    shortcut::validate(&options).map_err(usage)?;
+    let existed = options.output.exists();
+    let before = existed
+        .then(|| audit::file_digest(&options.output))
+        .transpose()
+        .with_context(|| format!("cannot hash existing shortcut {}", options.output.display()))?;
+    if !confirm(
+        &cli.global,
+        policy,
+        &format!(
+            "{} native shortcut {} -> {}?",
+            if existed { "Replace" } else { "Create" },
+            options.output.display(),
+            options.target.display()
+        ),
+    ) {
+        return Err(access_denied("shortcut creation was not confirmed"));
+    }
+    let mut logger = open_audit(cli, policy, &command_line())?;
+    if cli.global.dry_run {
+        if let Some(log) = logger.as_mut() {
+            log.record_artifact(audit::ArtifactEvent {
+                op: audit::ArtifactOp::ShortcutCreate,
+                path: &options.output,
+                before_sha256: before.as_deref(),
+                after_sha256: None,
+                outcome: audit::Outcome::Simulated,
+                detail: Some("dry-run"),
+            });
+        }
+        let info = planned_link_info(&options);
+        print_link_info(cli, "create", &info, true, existed, before.as_deref());
+        return Ok(exit::OK);
+    }
+
+    let info = shortcut::create(&options, existed).map_err(|error| anyhow!(error))?;
+    let after = audit::file_digest(&options.output)
+        .with_context(|| format!("cannot hash shortcut {}", options.output.display()))?;
+    if let Some(log) = logger.as_mut() {
+        log.record_artifact(audit::ArtifactEvent {
+            op: audit::ArtifactOp::ShortcutCreate,
+            path: &options.output,
+            before_sha256: before.as_deref(),
+            after_sha256: Some(&after),
+            outcome: audit::Outcome::Applied,
+            detail: None,
+        });
+    }
+    print_link_info(cli, "create", &info, false, existed, Some(&after));
+    Ok(exit::OK)
+}
+
+fn cmd_lnk_delete(cli: &Cli, policy: &policy::Policy, file: &Path) -> anyhow::Result<i32> {
+    let info = shortcut::inspect(file).map_err(|error| anyhow!(error))?;
+    let before = audit::file_digest(&info.file)
+        .with_context(|| format!("cannot hash shortcut {}", info.file.display()))?;
+    if !confirm(
+        &cli.global,
+        policy,
+        &format!("Delete native shortcut {}?", info.file.display()),
+    ) {
+        return Err(access_denied("shortcut deletion was not confirmed"));
+    }
+    let mut logger = open_audit(cli, policy, &command_line())?;
+    if !cli.global.dry_run {
+        shortcut::delete(&info.file).map_err(|error| anyhow!(error))?;
+    }
+    if let Some(log) = logger.as_mut() {
+        log.record_artifact(audit::ArtifactEvent {
+            op: audit::ArtifactOp::ShortcutDelete,
+            path: &info.file,
+            before_sha256: Some(&before),
+            after_sha256: None,
+            outcome: if cli.global.dry_run {
+                audit::Outcome::Simulated
+            } else {
+                audit::Outcome::Applied
+            },
+            detail: cli.global.dry_run.then_some("dry-run"),
+        });
+    }
+    print_link_info(
+        cli,
+        "delete",
+        &info,
+        cli.global.dry_run,
+        true,
+        Some(&before),
+    );
+    Ok(exit::OK)
+}
+
+fn cmd_lnk_apply(cli: &Cli, policy: &policy::Policy, source: &Path) -> anyhow::Result<i32> {
+    if is_stream_input(source) && !cli.global.dry_run && (!cli.global.yes || policy.require_confirm)
+    {
+        return Err(usage(
+            "applying a shortcut manifest from stdin or a named pipe requires -y (and cannot be used when policy requires interactive confirmation)",
+        ));
+    }
+    let bytes = read_input_bytes(source)?;
+    let text = decode_shortcut_manifest(&bytes)
+        .map_err(|error| usage(format!("{}: {error}", input_label(source))))?;
+    let manifest = shortcut_manifest::parse(&text).map_err(usage)?;
+    let mut prepared = Vec::with_capacity(manifest.actions.len());
+    let mut destinations = std::collections::BTreeSet::new();
+    for action in manifest.actions {
+        let action = match action {
+            shortcut_manifest::Action::Create(options) => {
+                let options = shortcut::resolve_options(&options).map_err(usage)?;
+                shortcut::validate(&options).map_err(usage)?;
+                PreparedShortcutAction::Create(options)
+            }
+            shortcut_manifest::Action::Delete(path) => {
+                let info = shortcut::inspect(&path).map_err(|error| anyhow!(error))?;
+                PreparedShortcutAction::Delete(info.file)
+            }
+        };
+        let destination = action.path();
+        let identity = destination
+            .as_os_str()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if !destinations.insert(identity) {
+            return Err(usage(format!(
+                "shortcut manifest changes {} more than once; split dependent changes into separate invocations",
+                destination.display()
+            )));
+        }
+        prepared.push(action);
+    }
+
+    let snapshots = prepared
+        .iter()
+        .map(|action| {
+            let path = action.path();
+            if path.exists() {
+                std::fs::read(path)
+                    .map(Some)
+                    .with_context(|| format!("cannot snapshot shortcut {}", path.display()))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if !confirm(
+        &cli.global,
+        policy,
+        &format!("Apply {} native shortcut action(s)?", prepared.len()),
+    ) {
+        return Err(access_denied("shortcut manifest was not confirmed"));
+    }
+    let mut logger = open_audit(cli, policy, &command_line())?;
+    if cli.global.dry_run {
+        print_manifest_result(cli, &prepared, true, false);
+        for (action, before) in prepared.iter().zip(&snapshots) {
+            record_shortcut_action(
+                logger.as_mut(),
+                action,
+                before.as_ref().map(|bytes| sha256::hash_hex(bytes)),
+                None,
+                audit::Outcome::Simulated,
+                Some("dry-run"),
+            );
+        }
+        return Ok(exit::OK);
+    }
+
+    for (index, action) in prepared.iter().enumerate() {
+        let result = apply_shortcut_action(action);
+        if let Err(error) = result {
+            let mut rollback_failed = Vec::new();
+            for prior in (0..index).rev() {
+                if let Err(rollback_error) =
+                    restore_shortcut_snapshot(prepared[prior].path(), snapshots[prior].as_deref())
+                {
+                    rollback_failed.push(rollback_error);
+                }
+            }
+            print_manifest_result(cli, &prepared, false, true);
+            let suffix = if rollback_failed.is_empty() {
+                "all earlier shortcut actions were rolled back".to_string()
+            } else {
+                format!("rollback failures: {}", rollback_failed.join("; "))
+            };
+            return Err(anyhow!(
+                "shortcut action {} failed: {error}; {suffix}",
+                index + 1
+            ));
+        }
+        let before = snapshots[index]
+            .as_ref()
+            .map(|bytes| sha256::hash_hex(bytes));
+        let after = action
+            .path()
+            .exists()
+            .then(|| audit::file_digest(action.path()))
+            .transpose()
+            .with_context(|| format!("cannot hash shortcut {}", action.path().display()))?;
+        record_shortcut_action(
+            logger.as_mut(),
+            action,
+            before,
+            after,
+            audit::Outcome::Applied,
+            None,
+        );
+    }
+    print_manifest_result(cli, &prepared, false, false);
+    Ok(exit::OK)
+}
+
+fn decode_shortcut_manifest(bytes: &[u8]) -> Result<String, String> {
+    if bytes.starts_with(&[0xff, 0xfe])
+        || bytes.starts_with(&[0xfe, 0xff])
+        || bytes.starts_with(&[0xef, 0xbb, 0xbf])
+    {
+        return encoding::decode_strict(bytes).map(|(text, _)| text);
+    }
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|error| format!("shortcut manifest is not valid UTF-8: {error}"))
+}
+
+enum PreparedShortcutAction {
+    Create(shortcut::CreateOptions),
+    Delete(PathBuf),
+}
+
+impl PreparedShortcutAction {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Create(options) => &options.output,
+            Self::Delete(path) => path,
+        }
+    }
+
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::Create(_) => "create",
+            Self::Delete(_) => "delete",
+        }
+    }
+}
+
+fn apply_shortcut_action(action: &PreparedShortcutAction) -> Result<(), String> {
+    match action {
+        PreparedShortcutAction::Create(options) => {
+            shortcut::create(options, options.output.exists()).map(|_| ())
+        }
+        PreparedShortcutAction::Delete(path) => shortcut::delete(path).map(|_| ()),
+    }
+}
+
+fn restore_shortcut_snapshot(path: &Path, bytes: Option<&[u8]>) -> Result<(), String> {
+    match bytes {
+        Some(bytes) => file_io::atomic_write(path, bytes)
+            .map_err(|error| format!("cannot restore {}: {error}", path.display())),
+        None if path.exists() => std::fs::remove_file(path)
+            .map_err(|error| format!("cannot remove {} during rollback: {error}", path.display())),
+        None => Ok(()),
+    }
+}
+
+fn record_shortcut_action(
+    logger: Option<&mut audit::Logger>,
+    action: &PreparedShortcutAction,
+    before: Option<String>,
+    after: Option<String>,
+    outcome: audit::Outcome,
+    detail: Option<&str>,
+) {
+    let Some(logger) = logger else { return };
+    logger.record_artifact(audit::ArtifactEvent {
+        op: match action {
+            PreparedShortcutAction::Create(_) => audit::ArtifactOp::ShortcutCreate,
+            PreparedShortcutAction::Delete(_) => audit::ArtifactOp::ShortcutDelete,
+        },
+        path: action.path(),
+        before_sha256: before.as_deref(),
+        after_sha256: after.as_deref(),
+        outcome,
+        detail,
+    });
+}
+
+fn planned_link_info(options: &shortcut::CreateOptions) -> shortcut::LinkInfo {
+    shortcut::LinkInfo {
+        file: options.output.clone(),
+        target: options.target.clone(),
+        working_directory: options.working_directory.clone(),
+        arguments: options.arguments.clone().unwrap_or_default(),
+        description: options.description.clone().unwrap_or_default(),
+        icon_path: options.icon_path.clone(),
+        icon_index: options.icon_index,
+        style: options.style,
+    }
+}
+
+fn print_link_info(
+    cli: &Cli,
+    action: &str,
+    info: &shortcut::LinkInfo,
+    dry_run: bool,
+    replaced: bool,
+    sha256: Option<&str>,
+) {
+    if cli.global.output == OutputFormat::Json {
+        println!(
+            "{{\"schemaVersion\":1,\"command\":\"lnk\",\"action\":{},\"dryRun\":{},\"replaced\":{},\"file\":{},\"target\":{},\"arguments\":{},\"workingDirectory\":{},\"description\":{},\"iconPath\":{},\"iconIndex\":{},\"style\":{},\"sha256\":{}}}",
+            jstr(action),
+            dry_run,
+            replaced,
+            jstr(&info.file.display().to_string()),
+            jstr(&info.target.display().to_string()),
+            jstr(&info.arguments),
+            info.working_directory
+                .as_ref()
+                .map(|path| jstr(&path.display().to_string()))
+                .unwrap_or_else(|| "null".into()),
+            jstr(&info.description),
+            info.icon_path
+                .as_ref()
+                .map(|path| jstr(&path.display().to_string()))
+                .unwrap_or_else(|| "null".into()),
+            info.icon_index,
+            jstr(info.style.as_str()),
+            sha256.map(jstr).unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!(
+            "{} {} -> {}{}",
+            if dry_run { "Would" } else { "Shortcut" },
+            action,
+            info.file.display(),
+            if action != "delete" {
+                format!(" (target: {})", info.target.display())
+            } else {
+                String::new()
+            }
+        );
+    }
+}
+
+fn print_manifest_result(
+    cli: &Cli,
+    actions: &[PreparedShortcutAction],
+    dry_run: bool,
+    failed: bool,
+) {
+    if cli.global.output == OutputFormat::Json {
+        let items = actions
+            .iter()
+            .map(|action| {
+                format!(
+                    "{{\"operation\":{},\"path\":{}}}",
+                    jstr(action.operation()),
+                    jstr(&action.path().display().to_string())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        println!(
+            "{{\"schemaVersion\":1,\"command\":\"lnk.apply\",\"dryRun\":{},\"failed\":{},\"actions\":[{}]}}",
+            dry_run, failed, items
+        );
+    } else {
+        println!(
+            "{} {} shortcut action(s){}",
+            if dry_run { "Would apply" } else { "Applied" },
+            actions.len(),
+            if failed {
+                " (failed and rolled back)"
+            } else {
+                ""
+            }
+        );
+        for action in actions {
+            println!("  {} {}", action.operation(), action.path().display());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -12064,6 +12583,48 @@ fn cmd_self_check(g: &GlobalOpts, policy: &policy::Policy) -> i32 {
 mod main_tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn lnk_create_output_path_and_global_json_remain_unambiguous() {
+        let args = [
+            "regx",
+            "lnk",
+            "create",
+            "--output",
+            r"shell:Startup\App.lnk",
+            "--output",
+            "json",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from);
+        let normalized = normalize_lnk_output_args(args)
+            .into_iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(normalized[3], "--shortcut-output");
+        assert_eq!(normalized[5], "--output");
+    }
+
+    #[test]
+    fn shell_tokens_are_resolved_in_any_unicode_cli_argument() {
+        let args = ["regx", "lnk", "create", r"shell:Desktop\App.lnk"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
+        let resolved = resolve_shell_cli_args(args).unwrap();
+        let path = resolved[3].to_string_lossy();
+        assert!(!path.to_ascii_lowercase().contains("shell:desktop"));
+        assert!(Path::new(path.as_ref()).is_absolute(), "{path}");
+    }
+
+    #[test]
+    fn shortcut_manifest_prefers_utf8_and_accepts_utf16_bom() {
+        let utf8 = "[SHORTCUT]\nDescription=Tiếng Việt ✓\n";
+        assert_eq!(decode_shortcut_manifest(utf8.as_bytes()).unwrap(), utf8);
+        assert_eq!(
+            decode_shortcut_manifest(&encoding::encode_utf16le_bom(utf8)).unwrap(),
+            utf8
+        );
+    }
 
     #[test]
     fn stream_reader_enforces_the_registry_input_limit() {

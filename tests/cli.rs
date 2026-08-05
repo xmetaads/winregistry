@@ -1647,6 +1647,96 @@ fn file_reading_commands_accept_windows_named_pipe_input() {
 }
 
 #[test]
+fn native_lnk_cli_creates_inspects_audits_and_deletes_without_a_shell() {
+    let d = Scratch::new("native-lnk-cli");
+    let link = d.path("Unicode Shortcut ✓.lnk");
+    let audit = d.path("shortcut-audit.jsonl");
+    let target = bin();
+
+    let created = run(&[
+        "lnk",
+        "create",
+        "--target",
+        &s(&target),
+        "--output",
+        &s(&link),
+        "--args=--version",
+        "--description",
+        "Native Unicode ✓",
+        "--style",
+        "hidden",
+        "--audit-log",
+        &s(&audit),
+        "-y",
+        "--output",
+        "json",
+    ]);
+    assert_eq!(code(&created), OK, "{}", stderr(&created));
+    assert!(link.exists());
+    let json: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(json["action"], "create");
+    assert_eq!(json["target"], s(&target));
+    assert!(json["sha256"].as_str().unwrap().len() == 64);
+
+    let inspected = run(&["lnk", "inspect", &s(&link), "--output", "json"]);
+    assert_eq!(code(&inspected), OK, "{}", stderr(&inspected));
+    let json: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    assert_eq!(json["arguments"], "--version");
+    assert_eq!(json["description"], "Native Unicode ✓");
+    assert_eq!(json["style"], "minimized");
+
+    let deleted = run(&["lnk", "delete", &s(&link), "--audit-log", &s(&audit), "-y"]);
+    assert_eq!(code(&deleted), OK, "{}", stderr(&deleted));
+    assert!(!link.exists());
+    let audit_text = std::fs::read_to_string(audit).unwrap();
+    assert!(audit_text.contains("shortcut.create"), "{audit_text}");
+    assert!(audit_text.contains("shortcut.delete"), "{audit_text}");
+}
+
+#[test]
+fn shortcut_manifest_accepts_stdin_and_known_folder_tokens() {
+    let d = Scratch::new("lnk-manifest");
+    let link = d.path("manifest.lnk");
+    let target = bin();
+    let manifest = format!(
+        "[SHORTCUT]\nTarget={}\nOutput={}\nArguments=--version\nStyle=normal\n",
+        s(&target),
+        s(&link)
+    );
+
+    let created = run_stdin(&["lnk", "apply", "-", "-y", "--output", "json"], &manifest);
+    assert_eq!(code(&created), OK, "{}", stderr(&created));
+    assert!(link.exists());
+
+    let delete_manifest = format!("[DELETE_SHORTCUT]\nPath={}\n", s(&link));
+    let deleted = run_stdin(&["lnk", "apply", "-", "-y"], &delete_manifest);
+    assert_eq!(code(&deleted), OK, "{}", stderr(&deleted));
+    assert!(!link.exists());
+
+    let known_folder = run(&[
+        "lnk",
+        "create",
+        "--target",
+        &s(&target),
+        "--output",
+        r"shell:Startup\regx-known-folder-contract.lnk",
+        "--dry-run",
+        "--output",
+        "json",
+    ]);
+    assert_eq!(code(&known_folder), OK, "{}", stderr(&known_folder));
+    let json: serde_json::Value = serde_json::from_slice(&known_folder.stdout).unwrap();
+    assert!(
+        json["file"]
+            .as_str()
+            .unwrap()
+            .ends_with(r"Start Menu\Programs\Startup\regx-known-folder-contract.lnk"),
+        "{}",
+        stdout(&known_folder)
+    );
+}
+
+#[test]
 fn stdin_fix_requires_an_output_file() {
     let reg = "Windows Registry Editor Version 5.00\n";
     let o = run_stdin(&["validate", "-", "--fix"], reg);

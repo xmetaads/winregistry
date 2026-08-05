@@ -6,6 +6,7 @@
 <title>Documentation — regx | winregistry.org</title>
 <meta name="description" content="Complete command reference for regx: install, import, export, convert, sync, validate --fix, probe, offline hive operations via RegLoadAppKey, exit codes, and getting past AppLocker and WDAC.">
 <link rel="canonical" href="https://www.winregistry.org/docs">
+<link rel="alternate" type="application/json" title="regx machine-readable capabilities" href="/capabilities.json">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://www.winregistry.org/docs">
 <meta property="og:title" content="regx documentation">
@@ -97,6 +98,7 @@
       <li><a href="#plan">plan</a></li>
       <li><a href="#batch">batch</a></li>
       <li><a href="#audit">audit</a></li>
+      <li><a href="#lnk">lnk and Known Folders</a></li>
     </ul>
     <h2>Reference</h2>
     <ul>
@@ -1317,6 +1319,77 @@ regx audit <span class="tok-str">"C:\logs\regx.jsonl"</span> <span class="tok-fl
         A <code>--dry-run</code> is recorded with outcome <code>simulated</code>, so a rehearsal is
         distinguishable from the real thing in the record. Failed operations are recorded too, with
         the error — an attempt that was denied is as much a part of the trail as one that succeeded.
+      </p>
+    </section>
+
+    <!-- ================= LNK / KNOWN FOLDERS ================= -->
+    <section id="lnk">
+      <h2><code>lnk</code>: Known Folders and native Windows shortcuts</h2>
+      <p>
+        Every path-bearing CLI argument recognizes <code>shell:Startup</code>,
+        <code>shell:Desktop</code>, and <code>shell:Programs</code>. regx resolves these
+        names with <code>SHGetKnownFolderPath</code>, with the documented legacy
+        <code>SHGetFolderPathW</code> fallback. It does not expand a guessed environment
+        path or invoke an external shell.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-dim"># Create a current-user Startup shortcut through native COM</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> lnk create <span class="tok-flag">--target</span> <span class="tok-str">"C:\Program Files\Acme\Acme.exe"</span> <span class="tok-flag">--output</span> <span class="tok-str">"shell:Startup\Acme.lnk"</span> <span class="tok-flag">--args</span>=--background <span class="tok-flag">--workdir</span> <span class="tok-str">"C:\Program Files\Acme"</span> <span class="tok-flag">--icon</span> <span class="tok-str">"C:\Program Files\Acme\Acme.exe,0"</span> <span class="tok-flag">--style</span> hidden <span class="tok-flag">-y</span>
+
+<span class="tok-dim"># Inspect without launching, rehearse, then remove</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> lnk inspect <span class="tok-str">"shell:Startup\Acme.lnk"</span> <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> lnk delete <span class="tok-str">"shell:Startup\Acme.lnk"</span> <span class="tok-flag">--dry-run</span>
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> lnk delete <span class="tok-str">"shell:Startup\Acme.lnk"</span> <span class="tok-flag">-y</span></code></pre>
+      </div>
+      <p>
+        Creation uses <code>CoCreateInstance(CLSID_ShellLink)</code>,
+        <code>IShellLinkW</code>, and <code>IPersistFile</code>. Target, arguments,
+        working directory, description, icon location/index, and show style are written to a
+        temporary link, read back through COM, verified, and atomically committed. The
+        <code>hidden</code> and <code>minimized</code> styles both request
+        <code>SW_SHOWMINNOACTIVE</code>; this controls initial window presentation and does not
+        conceal the Startup entry from Windows or regx.
+      </p>
+      <p>
+        All mutations support confirmation, <code>-y</code>, <code>--dry-run</code>, and
+        tamper-evident <code>--audit-log</code> records containing exact before/after shortcut
+        SHA-256 values. A shortcut target must be an existing absolute file, the destination
+        must end in <code>.lnk</code>, and inspect/delete refuse objects that cannot be parsed as
+        native links.
+      </p>
+
+      <h3>Shortcut manifests</h3>
+      <p>
+        <code>lnk apply</code> reads UTF-8 or BOM-marked UTF-16 from a file, <code>-</code>, or
+        <code>pipe:NAME</code>. It preflights every block, rejects duplicate destinations, asks
+        once, and rolls earlier writes back if a later action fails. Stream mutations require
+        <code>-y</code> because the stream is already consumed before confirmation.
+      </p>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">startup.shortcuts</span></div>
+<pre><code>[SHORTCUT]
+Target=C:\Program Files\Acme\Acme.exe
+Output=shell:Startup\Acme.lnk
+WorkingDirectory=C:\Program Files\Acme
+Arguments=--background
+Description=Acme background client
+Icon=C:\Program Files\Acme\Acme.exe,0
+Style=hidden
+
+[DELETE_SHORTCUT]
+Path=shell:Desktop\Old Acme.lnk</code></pre>
+      </div>
+      <div class="terminal">
+        <div class="terminal-bar"><span class="title">powershell</span></div>
+<pre><code><span class="tok-prompt">&gt;</span> <span class="tok-cmd">regx</span> lnk apply startup.shortcuts <span class="tok-flag">--dry-run</span> <span class="tok-flag">--output</span> json
+<span class="tok-prompt">&gt;</span> <span class="tok-cmd">Get-Content</span> startup.shortcuts <span class="tok-flag">-Raw</span> | regx lnk apply - <span class="tok-flag">-y</span></code></pre>
+      </div>
+      <p>
+        Automation can consume the
+        <a href="/schemas/shortcut-result-v1.json">shortcut result schema v1</a>, the
+        <a href="/capabilities.json">machine-readable capability inventory</a>, or the compact
+        <a href="/llms.txt">AI-agent project summary</a>.
       </p>
     </section>
 
