@@ -228,6 +228,9 @@ jobs:
             throw "CreateProfile failed for $user with HRESULT 0x$('{0:X8}' -f $profileCode)"
           }
           "created profile: $profilePath"
+          $profileRoot = $profilePath.ToString()
+          & reg.exe load "HKU\$sid" (Join-Path $profileRoot "NTUSER.DAT") | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot load the test user's HKCU hive" }
 
           # The account needs to read the workspace and write its own temp.
           & icacls "${env:GITHUB_WORKSPACE}" /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
@@ -237,13 +240,16 @@ jobs:
 
           $cred = New-Object System.Management.Automation.PSCredential($user, $secure)
 
-          # Without -LoadUserProfile, the child would not load the account and
-          # child inherits this process's TEMP — which belongs to the runner's
-          # administrator and is not writable by an unprivileged account. The
-          # suites create scratch directories under TEMP, so point it at the
-          # one that was just granted to the account.
-          # Known Folder APIs and HKCU require the target account's real profile.
-          # Keep TEMP isolated even after loading it below.
+          # Start-Process changes the token but inherits the runner
+          # administrator's environment. Point every profile variable at the
+          # loaded non-admin profile and keep temporary files isolated.
+          $env:USERPROFILE = $profileRoot
+          $env:HOMEDRIVE = [IO.Path]::GetPathRoot($profileRoot).TrimEnd('\')
+          $env:HOMEPATH = $profileRoot.Substring($env:HOMEDRIVE.Length)
+          $env:APPDATA = Join-Path $profileRoot "AppData\Roaming"
+          $env:LOCALAPPDATA = Join-Path $profileRoot "AppData\Local"
+          $env:USERNAME = $user
+          $env:USERDOMAIN = $env:COMPUTERNAME
           $env:TEMP = $scratch
           $env:TMP = $scratch
 
@@ -262,7 +268,6 @@ jobs:
             $p = Start-Process -FilePath $t.FullName `
                 -ArgumentList "--nocapture" `
                 -Credential $cred `
-                -LoadUserProfile `
                 -WorkingDirectory $scratch `
                 -RedirectStandardOutput $out `
                 -RedirectStandardError $err `
@@ -287,6 +292,10 @@ jobs:
             }
           }
 
+          [GC]::Collect()
+          [GC]::WaitForPendingFinalizers()
+          & reg.exe unload "HKU\$sid" | Out-Null
+          if ($LASTEXITCODE -ne 0) { $failed += "HKCU hive unload" }
           Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
           if ($failed.Count -gt 0) {
             throw "failed as a standard user: $($failed -join ', ')"
